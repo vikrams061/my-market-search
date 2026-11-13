@@ -157,25 +157,10 @@ INDEX_HTML = """<!DOCTYPE html>
     <button class="tab-btn" onclick="switchTab('radar', this)">Momentum Radar</button>
     <button class="tab-btn" onclick="switchTab('options', this)">Options Desk</button>
     <button class="tab-btn" onclick="switchTab('orb', this)">ORB / VWAP</button>
+    <button class="tab-btn" onclick="switchTab('credit', this)">Credit Desk</button>
   </div>
 
   <div class="tab-pane active" id="pane-dashboard">
-  <div class="analyst">
-    <h2>Agent Performance
-      <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
-    </h2>
-    <div id="agent-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;margin:.75rem 0"></div>
-    <div class="perf-grid" id="perf-stats"></div>
-    <table id="perf-table">
-      <thead><tr>
-        <th>Date</th><th>Agent</th><th>Side</th><th>Symbol</th>
-        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
-      </tr></thead>
-      <tbody id="perf-rows"></tbody>
-    </table>
-    <div id="optimizer" style="margin-top:.75rem"></div>
-  </div>
-
   <div class="controls">
     <input id="sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
     <select id="kind">
@@ -196,11 +181,59 @@ INDEX_HTML = """<!DOCTYPE html>
     No instruments yet — add a symbol above to start watching.
   </div>
   <div id="status"></div>
+
+  <div class="analyst">
+    <h2>Trade Tracker</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Track any stock, index, or option (CE/PE) with entry, target &amp; stop-loss — live status and P&L.</div>
+    <div class="controls">
+      <select id="tr-asset" onchange="trAssetChange()">
+        <option value="EQ">Stock/Index</option>
+        <option value="OPTION">Option</option>
+      </select>
+      <input id="tr-sym" placeholder="Symbol / Underlying (e.g. RELIANCE, NIFTY)" maxlength="30" />
+      <select id="tr-kind"><option value="EQ">Stock</option><option value="INDEX">Index</option></select>
+      <select id="tr-side"><option value="long">Long</option><option value="short">Short</option></select>
+      <input id="tr-entry" placeholder="Entry ₹" type="number" step="0.01" style="width:90px" />
+      <input id="tr-target" placeholder="Target ₹" type="number" step="0.01" style="width:90px" />
+      <input id="tr-sl" placeholder="Stop ₹" type="number" step="0.01" style="width:90px" />
+      <button onclick="addTrade()">+ Track</button>
+    </div>
+    <div class="controls" id="tr-opt-row" style="display:none">
+      <input id="tr-expiry" type="date" style="width:140px" />
+      <input id="tr-strike" placeholder="Strike ₹" type="number" step="0.01" style="width:90px" />
+      <select id="tr-opttype"><option value="CE">CE (Call)</option><option value="PE">PE (Put)</option></select>
+    </div>
+    <table id="trade-table">
+      <thead><tr>
+        <th>Symbol</th><th>Type</th><th class="num">Entry</th><th class="num">Current</th>
+        <th class="num">Target</th><th class="num">Stop</th><th class="num">P&L</th><th>Status</th><th></th>
+      </tr></thead>
+      <tbody id="trade-rows"></tbody>
+    </table>
+  </div>
+
+  <div class="analyst">
+    <h2>Agent Performance
+      <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
+    </h2>
+    <div id="agent-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;margin:.75rem 0"></div>
+    <div class="perf-grid" id="perf-stats"></div>
+    <table id="perf-table">
+      <thead><tr>
+        <th>Date</th><th>Agent</th><th>Side</th><th>Symbol</th>
+        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
+      </tr></thead>
+      <tbody id="perf-rows"></tbody>
+    </table>
+    <div id="optimizer" style="margin-top:.75rem"></div>
+
+  </div>
   </div><!-- /pane-dashboard -->
 
   <div class="tab-pane" id="pane-analyst">
   <div class="analyst">
     <h2>Equity Analyst Agent</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">7-phase momentum report on your watchlist: news, technicals, targets, option strategy.</div>
     <button id="analyze-btn" onclick="runAnalysis()">Run Momentum Analysis</button>
     <div id="analysis-status"></div>
     <div id="report"></div>
@@ -209,6 +242,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div class="tab-pane" id="pane-nifty">
   <div class="analyst">
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Daily momentum scan of all 50 NIFTY constituents — top bullish/bearish picks with bias &amp; confidence.</div>
     <h2>Today's NIFTY 50 Picks
       <button class="scan-btn" id="scan-btn" onclick="startScan()">Rescan</button>
     </h2>
@@ -223,6 +257,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div class="tab-pane" id="pane-active">
   <div class="analyst">
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Momentum scan of ~100 liquid NSE large/mid caps for today's active picks.</div>
     <h2>Today's Active Stock Picks
       <button class="scan-btn" id="active-scan-btn" onclick="startActiveScan()">Rescan</button>
     </h2>
@@ -234,6 +269,7 @@ INDEX_HTML = """<!DOCTYPE html>
   <div class="tab-pane" id="pane-check">
   <div class="analyst">
     <h2>Trend &amp; Momentum Check</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">On-demand trend bias, momentum score &amp; confidence for any stock or index.</div>
     <div class="controls">
       <input id="check-sym" placeholder="Any symbol (e.g. TATAMOTORS, NIFTY)" maxlength="30" />
       <select id="check-kind">
@@ -248,6 +284,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div class="tab-pane" id="pane-radar">
   <div class="analyst">
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Broad ~180-symbol multi-cap scan (small/mid/large) — top momentum names with bias &amp; confidence.</div>
     <h2>Momentum Radar — All Caps
       <button class="scan-btn" id="mom-scan-btn" onclick="startMomScan()">Rescan</button>
     </h2>
@@ -262,6 +299,7 @@ INDEX_HTML = """<!DOCTYPE html>
   <div class="tab-pane" id="pane-options">
   <div class="analyst">
     <h2>Options Desk — Defined-Risk Spreads</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">RSI+EMA swing setups with Bull Call / Bear Put spreads, targets &amp; 1:2 R:R checks.</div>
     <div class="controls">
       <input id="opt-sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
       <select id="opt-kind">
@@ -278,6 +316,7 @@ INDEX_HTML = """<!DOCTYPE html>
   <div class="tab-pane" id="pane-orb">
   <div class="analyst">
     <h2>ORB / VWAP Momentum Desk</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">15m opening-range breakout + session VWAP + RVOL filter for intraday option entries.</div>
     <div class="controls">
       <input id="orb-sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
       <select id="orb-kind">
@@ -290,6 +329,17 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="orb-report"></div>
   </div>
   </div><!-- /pane-orb -->
+
+  <div class="tab-pane" id="pane-credit">
+  <div class="analyst">
+    <h2>Credit Desk — Defined-Risk Selling
+      <button class="scan-btn" onclick="runCredit()">Refresh</button>
+    </h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Regime-filtered credit strategies on <b>NIFTY</b> — auto-refreshes every 5 min; picks tracked for win/loss.</div>
+    <div id="credit-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="credit-report"></div>
+  </div>
+  </div><!-- /pane-credit -->
 
 <script>
 function switchTab(name, btn) {
@@ -628,6 +678,52 @@ async function runOrb() {
   }
 }
 
+// ---- Credit desk (NIFTY only, auto-refresh) -------------------------------
+async function runCredit() {
+  const statusEl = document.getElementById('credit-status');
+  const out = document.getElementById('credit-report');
+  statusEl.textContent = 'Analyzing NIFTY…';
+  try {
+    const res = await fetch('/api/credit/analyze?symbol=NIFTY&kind=INDEX');
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Analysis failed'; return; }
+    statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN');
+    out.innerHTML = d.html;
+    const tracks = d.track || [];
+    if (tracks.length) {
+      out.innerHTML += `<table id="credit-strat" style="margin-top:.75rem">
+        <thead><tr>
+          <th>Strategy</th><th>Type</th><th class="num">Sell Strike</th><th class="num">Buy Strike</th>
+          <th class="num">Credit</th><th class="num">Target</th><th class="num">Stop (Underlying)</th><th></th>
+        </tr></thead>
+        <tbody>${tracks.map(t => `<tr>
+          <td>${t.strategy}</td>
+          <td>${t.opt_type === 'CE' ? 'Call (CE)' : 'Put (PE)'}</td>
+          <td class="num">${fmtInr(t.short_strike)}</td>
+          <td class="num">${fmtInr(t.long_strike)}</td>
+          <td class="num">₹${t.entry_credit}</td>
+          <td class="num">₹${t.target}</td>
+          <td class="num">${t.stop_loss != null ? fmtInr(t.stop_loss) : '—'}</td>
+          <td><button class="scan-btn" onclick='trackCredit(${JSON.stringify(t)})'>+ Add</button></td>
+        </tr>`).join('')}</tbody>
+      </table>
+      <div class="meta" style="font-size:.75rem;color:#64748b;margin-top:.4rem">Credits &amp; levels are estimates — verify on NSE option chain. Added trades appear in Dashboard → Trade Tracker.</div>`;
+    }
+  } catch (e) {
+    statusEl.textContent = 'Request failed';
+  }
+}
+
+async function trackCredit(t) {
+  await fetch('/api/trades', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(t),
+  });
+  refreshPerf(true);
+}
+runCredit();
+setInterval(runCredit, 300000);
+
 // ---- Agent performance ----------------------------------------------------
 async function refreshPerf(force) {
   try {
@@ -652,6 +748,7 @@ async function refreshPerf(force) {
       {key: 'nifty',   name: 'NIFTY 50 Scanner',  desc: 'Daily momentum scan of all 50 NIFTY constituents; picks top bullish/bearish.', src: 'nifty'},
       {key: 'active',  name: 'Active Stocks',     desc: 'Momentum scan of ~100 liquid NSE large/mid caps.', src: 'active'},
       {key: 'momentum',name: 'Momentum Radar',    desc: 'Broad ~180-symbol multi-cap scan (small/mid/large) with trend bias + confidence.', src: 'momentum'},
+      {key: 'credit',  name: 'Credit Desk',       desc: 'Intraday defined-risk credit strategies (spreads/condors) with regime, VIX & time-window filters.', src: 'credit'},
     ];
     const bySrc = stats.by_source || {};
     document.getElementById('agent-cards').innerHTML = AGENTS.map(a => {
@@ -684,7 +781,62 @@ async function refreshPerf(force) {
            ${findings.map(f => `<div style="display:block;padding:.3rem 0">• ${f}</div>`).join('')}
          </div>`
       : '';
+
+    // Manual trades
+    const trs = document.getElementById('trade-rows');
+    trs.innerHTML = (d.trades || []).map(t => {
+      const stCls = t.status === 'TARGET HIT' ? 'up' : t.status === 'STOPPED' ? 'down' : 'flat';
+      const typeLbl = t.asset_type === 'OPTION'
+        ? `${t.opt_type} ${t.strike} ${t.expiry || ''}` : `${t.kind} ${t.side}`;
+      return `<tr>
+        <td>${t.symbol}${t.asset_type === 'OPTION' ? ' <span style="color:#94a3b8;font-size:.72rem">(' + (t.underlying||'') + ')</span>' : ''}</td>
+        <td style="font-size:.78rem">${typeLbl}</td>
+        <td class="num">${fmtInr(t.entry_price)}</td>
+        <td class="num">${t.current != null ? fmtInr(t.current) : '—'}</td>
+        <td class="num">${t.target != null ? fmtInr(t.target) : '—'}</td>
+        <td class="num">${t.stop_loss != null ? fmtInr(t.stop_loss) : '—'}</td>
+        <td class="num ${cls(t.pnl_pct)}">${t.pnl_pct != null ? sgn(t.pnl_pct) + t.pnl_pct + '%' : '—'}</td>
+        <td class="${stCls}">${t.status}</td>
+        <td><button class="del-btn" onclick="delTrade('${t.id}')">✕</button></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="9" style="color:#64748b">No tracked trades — add one above</td></tr>';
   } catch (e) {}
+}
+
+function trAssetChange() {
+  const isOpt = document.getElementById('tr-asset').value === 'OPTION';
+  document.getElementById('tr-opt-row').style.display = isOpt ? 'flex' : 'none';
+  document.getElementById('tr-side').style.display = isOpt ? 'none' : '';
+  document.getElementById('tr-kind').style.display = isOpt ? 'none' : '';
+}
+
+async function addTrade() {
+  const isOpt = document.getElementById('tr-asset').value === 'OPTION';
+  const payload = {
+    asset_type: document.getElementById('tr-asset').value,
+    symbol: document.getElementById('tr-sym').value.trim(),
+    kind: document.getElementById('tr-kind').value,
+    side: document.getElementById('tr-side').value,
+    entry_price: document.getElementById('tr-entry').value,
+    target: document.getElementById('tr-target').value || null,
+    stop_loss: document.getElementById('tr-sl').value || null,
+  };
+  if (isOpt) {
+    payload.underlying = payload.symbol;
+    payload.expiry = document.getElementById('tr-expiry').value || null;
+    payload.strike = document.getElementById('tr-strike').value;
+    payload.opt_type = document.getElementById('tr-opttype').value;
+    if (!payload.strike) return;
+  }
+  if (!payload.symbol || !payload.entry_price) return;
+  await fetch('/api/trades', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+  ['tr-sym','tr-entry','tr-target','tr-sl','tr-expiry','tr-strike'].forEach(id => document.getElementById(id).value = '');
+  refreshPerf(true);
+}
+
+async function delTrade(id) {
+  await fetch('/api/trades/' + id, {method: 'DELETE'});
+  refreshPerf(true);
 }
 
 tick();
@@ -697,7 +849,7 @@ refreshActivePicks();
 setInterval(refreshActivePicks, 15000);
 activeScanStatus();
 refreshPerf();
-setInterval(refreshPerf, 60000);
+setInterval(refreshPerf, 30000);
 refreshMomPicks();
 setInterval(refreshMomPicks, 20000);
 momScanStatus();
@@ -908,6 +1060,26 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc))
 
     # ------------------------------------------------------------------
+    # Manual trade tracker endpoints
+    # ------------------------------------------------------------------
+    @app.post("/api/trades", status_code=201)
+    async def add_trade(payload: dict) -> dict:
+        if performance is None:
+            raise HTTPException(status_code=503, detail="Performance agent not available")
+        try:
+            return performance._tracker.add(payload)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.delete("/api/trades/{trade_id}")
+    async def remove_trade(trade_id: str) -> dict:
+        if performance is None:
+            raise HTTPException(status_code=503, detail="Performance agent not available")
+        if not performance._tracker.remove(trade_id):
+            raise HTTPException(status_code=404, detail="Trade not found")
+        return {"deleted": trade_id}
+
+    # ------------------------------------------------------------------
     # Options desk agent
     # ------------------------------------------------------------------
     @app.get("/api/options/analyze")
@@ -932,6 +1104,25 @@ def create_app(
         try:
             md = analyze_orb(symbol, kind, logger)
             return {"html": markdown.markdown(md, extensions=["tables", "fenced_code", "nl2br"])}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------------
+    # Credit desk agent
+    # ------------------------------------------------------------------
+    @app.get("/api/credit/analyze")
+    async def credit_analyze(symbol: str = "NIFTY", kind: str = "INDEX") -> dict:
+        from credit_agent import analyze_credit
+
+        logger = logging.getLogger("market_watch")
+        try:
+            data = analyze_credit(symbol, kind, logger)
+            return {
+                "html": markdown.markdown(
+                    data["markdown"], extensions=["tables", "fenced_code", "nl2br"]
+                ),
+                "track": data.get("track", []),
+            }
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

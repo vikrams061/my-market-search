@@ -18,7 +18,184 @@ from datetime import date
 from typing import Any, Optional
 
 PICK_HISTORY_FILE = "pick_history.json"
-CACHE_TTL_SECONDS = 300  # refresh prices at most every 5 min
+TRADES_FILE = "manual_trades.json"
+CACHE_TTL_SECONDS = 120  # refresh prices every 2 min; UI polls every 30s
+
+
+class ManualTradeTracker:
+    """User-managed trades with entry/target/SL performance tracking."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def _load(self) -> list[dict]:
+        try:
+            return json.loads(open(TRADES_FILE, encoding="utf-8").read())
+        except Exception:
+            return []
+
+    def _save(self, trades: list[dict]) -> None:
+        with open(TRADES_FILE, "w", encoding="utf-8") as f:
+            json.dump(trades[-200:], f, indent=2)
+
+    def list(self) -> list[dict]:
+        return self._load()
+
+    def add(self, trade: dict) -> dict:
+        with self._lock:
+            trades = self._load()
+            asset_type = trade.get("asset_type", "EQ").upper()
+            rec = {
+                "id": f"t{int(time.time() * 1000)}",
+                "symbol": trade["symbol"].upper(),
+                "kind": trade.get("kind", "EQ").upper(),
+                "asset_type": asset_type,
+                "side": trade.get("side", "long").lower(),
+                "entry_price": float(trade.get("entry_price") or trade.get("entry_credit") or 0),
+                "target": float(trade["target"]) if trade.get("target") else None,
+                "stop_loss": float(trade["stop_loss"]) if trade.get("stop_loss") else None,
+                "added_at": date.today().isoformat(),
+                "status": "OPEN",
+            }
+            if asset_type == "OPTION":
+                und = trade.get("underlying", rec["symbol"]).upper()
+                rec.update({
+                    "underlying": und,
+                    "expiry": trade.get("expiry") or "",
+                    "strike": float(trade["strike"]),
+                    "opt_type": trade.get("opt_type", "CE").upper(),
+                    "underlying_entry": self._spot(und),
+                })
+            elif asset_type == "SPREAD":
+                und = trade.get("underlying", rec["symbol"]).upper()
+                rec.update({
+                    "underlying": und,
+                    "strategy": trade.get("strategy", "Spread"),
+                    "opt_type": trade.get("opt_type", "CE").upper(),
+                    "short_strike": float(trade["short_strike"]),
+                    "long_strike": float(trade["long_strike"]),
+                    "expiry": trade.get("expiry") or "",
+                    "entry_credit": float(trade["entry_credit"]),
+                    "underlying_entry": self._spot(und),
+                })
+            trades.append(rec)
+            self._save(trades)
+            return rec
+
+    @staticmethod
+    def _spot(symbol: str) -> Optional[float]:
+        try:
+            import yfinance as yf
+            idx = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}
+            return float(yf.Ticker(idx.get(symbol, f"{symbol}.NS")).fast_info.last_price)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _est_option_premium(t: dict, und_price: float) -> Optional[float]:
+        """Estimate current option premium from underlying move + time decay.
+
+        Model: intrinsic value now + entry time-value decayed linearly to
+        expiry, scaled by moneyness drift. LABELLED ESTIMATE — not a quote.
+        """
+        try:
+            K, ot, entry = t["strike"], t["opt_type"], t["entry_price"]
+            S0 = t.get("underlying_entry") or und_price
+            intr0 = max(0.0, (S0 - K) if ot == "CE" else (K - S0))
+            intr1 = max(0.0, (und_price - K) if ot == "CE" else (K - und_price))
+            tv0 = max(entry - intr0, entry * 0.10)
+            try:
+                exp = date.fromisoformat(t.get("expiry") or "")
+                total = max((exp - date.fromisoformat(t["added_at"])).days, 1)
+                left = max((exp - date.today()).days, 0)
+            except Exception:
+                total, left = 30, 15
+            decay = max(left / total, 0.02)
+            money = 0.5 + 0.5 * min(intr1 / max(intr0, 1.0), 2.0)
+            return round(intr1 + tv0 * decay * money, 2)
+        except Exception:
+            return None
+
+    def remove(self, trade_id: str) -> bool:
+        with self._lock:
+            trades = self._load()
+            kept = [t for t in trades if t.get("id") != trade_id]
+            if len(kept) == len(trades):
+                return False
+            self._save(kept)
+            return True
+
+    @staticmethod
+    def _est_spread_credit(t: dict, und_price: float) -> Optional[float]:
+        """Estimate remaining credit on a vertical spread via moneyness pressure.
+
+        CE spread (bear call): profits as underlying stays below short strike;
+        credit decays toward 0 as price approaches/passes long strike.
+        PE spread (bull put): mirror. LABELLED ESTIMATE.
+        """
+        try:
+            entry = t["entry_credit"]
+            K1, K2, ot = t["short_strike"], t["long_strike"], t["opt_type"]
+            if ot == "CE":
+                width = max(K2 - K1, 1e-9)
+                pressure = max(0.0, min(1.0, (und_price - K1) / width))
+            else:
+                width = max(K1 - K2, 1e-9)
+                pressure = max(0.0, min(1.0, (K1 - und_price) / width))
+            return round(entry * (1 - 0.85 * pressure), 2)
+        except Exception:
+            return None
+
+    def evaluate(self, prices: dict[str, Optional[float]]) -> list[dict]:
+        """Annotate each trade with current price, status and P&L %."""
+        out = []
+        for t in self._load():
+            at = t.get("asset_type")
+            if at == "SPREAD":
+                und_price = prices.get(t.get("underlying") or t["symbol"])
+                entry = t.get("entry_credit")
+                cur = self._est_spread_credit(t, und_price) if und_price and entry else None
+                pnl = round((entry - cur) / entry * 100, 2) if (cur is not None and entry) else None
+            elif at == "OPTION":
+                und_price = prices.get(t.get("underlying") or t["symbol"])
+                cur = self._est_option_premium(t, und_price) if und_price else None
+                entry = t.get("entry_price")
+                pnl = round((cur / entry - 1) * 100, 2) if (cur and entry) else None
+            else:
+                cur = prices.get(t["symbol"])
+                entry = t.get("entry_price")
+                side = t.get("side", "long")
+                direction = 1 if side == "long" else -1
+                pnl = round((cur / entry - 1) * 100 * direction, 2) if (cur and entry) else None
+
+            status = "OPEN"
+            if cur and entry:
+                tgt, sl = t.get("target"), t.get("stop_loss")
+                if at == "SPREAD":
+                    und_price = prices.get(t.get("underlying") or t["symbol"])
+                    if und_price and sl:
+                        invalid = (t.get("opt_type") == "CE" and und_price >= sl) or \
+                                  (t.get("opt_type") == "PE" and und_price <= sl)
+                        if invalid:
+                            status = "STOPPED"
+                        elif tgt and cur <= tgt:
+                            status = "TARGET HIT"
+                elif at == "OPTION":
+                    # premium terms: long premium position only
+                    if sl and cur <= sl:
+                        status = "STOPPED"
+                    elif tgt and cur >= tgt:
+                        status = "TARGET HIT"
+                else:
+                    direction = 1 if t.get("side", "long") == "long" else -1
+                    hit_target = tgt and ((direction == 1 and cur >= tgt) or (direction == -1 and cur <= tgt))
+                    hit_sl = sl and ((direction == 1 and cur <= sl) or (direction == -1 and cur >= sl))
+                    if hit_sl:
+                        status = "STOPPED"
+                    elif hit_target:
+                        status = "TARGET HIT"
+            out.append({**t, "current": cur, "pnl_pct": pnl, "status": status})
+        return out
 
 
 class PerformanceAgent:
@@ -29,6 +206,7 @@ class PerformanceAgent:
         self._lock = threading.Lock()
         self._cache: Optional[dict] = None
         self._cache_at: float = 0.0
+        self._tracker = ManualTradeTracker()
 
     # ------------------------------------------------------------------
     def report(self, force: bool = False) -> dict:
@@ -49,7 +227,14 @@ class PerformanceAgent:
             history = []
 
         today = date.today().isoformat()
-        prices = self._fetch_prices(history)
+        raw_trades = self._tracker.list()
+        trade_symbols = set()
+        for t in raw_trades:
+            trade_symbols.add(t["symbol"])
+            if t.get("asset_type") == "OPTION" and t.get("underlying"):
+                trade_symbols.add(t["underlying"])
+        prices = self._fetch_prices(history + [{"symbol": s} for s in trade_symbols])
+        trades = self._tracker.evaluate(prices)
 
         rows = []
         for h in history:
@@ -76,6 +261,7 @@ class PerformanceAgent:
             "total_picks": len(rows),
             "stats": stats,
             "rows": sorted(rows, key=lambda r: r.get("date") or "", reverse=True)[:40],
+            "trades": trades,
         }
 
     # ------------------------------------------------------------------
@@ -88,9 +274,12 @@ class PerformanceAgent:
 
         import yfinance as yf
 
+        idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^CNXFIN", "MIDCPNIFT": "^CNXMID"}
+
         def get(sym: str):
             try:
-                return sym, float(yf.Ticker(f"{sym}.NS").fast_info.last_price)
+                ys = idx_map.get(sym, f"{sym}.NS")
+                return sym, float(yf.Ticker(ys).fast_info.last_price)
             except Exception:
                 return sym, None
 
