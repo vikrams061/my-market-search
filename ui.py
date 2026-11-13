@@ -158,6 +158,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <button class="tab-btn" onclick="switchTab('options', this)">Options Desk</button>
     <button class="tab-btn" onclick="switchTab('orb', this)">ORB / VWAP</button>
     <button class="tab-btn" onclick="switchTab('credit', this)">Credit Desk</button>
+    <button class="tab-btn" onclick="switchTab('fno', this)">F&O Sim</button>
   </div>
 
   <div class="tab-pane active" id="pane-dashboard">
@@ -340,6 +341,31 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="credit-report"></div>
   </div>
   </div><!-- /pane-credit -->
+
+  <div class="tab-pane" id="pane-fno">
+  <div class="analyst">
+    <h2>F&amp;O Intraday Simulation <span class="meta" style="font-size:.75rem;color:#64748b">SIMULATED DATA — mock feed</span></h2>
+    <div class="meta" id="sim-telemetry" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+      <div>
+        <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">NIFTY Futures 5m</div>
+        <div id="sim-fut" style="height:300px"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.75rem">
+        <div>
+          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Call (CE)</div>
+          <div id="sim-ce" style="height:140px"></div>
+        </div>
+        <div>
+          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Put (PE)</div>
+          <div id="sim-pe" style="height:140px"></div>
+        </div>
+      </div>
+    </div>
+    <h3 style="margin-top:1rem">Virtual P&amp;L Ledger</h3>
+    <div id="sim-ledger" style="font-size:.85rem"></div>
+  </div>
+  </div><!-- /pane-fno -->
 
 <script>
 function switchTab(name, btn) {
@@ -566,6 +592,50 @@ async function startActiveScan() {
   setInterval(activeScanStatus, 2000);
   activeScanStatus();
 }
+
+// ---- F&O simulation -------------------------------------------------------
+let simCharts = {};
+function simChart(id) {
+  if (!simCharts[id]) {
+    simCharts[id] = LightweightCharts.createChart(document.getElementById(id),
+      {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
+       grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
+       timeScale:{borderColor:'#334155'},rightPriceScale:{borderColor:'#334155'}});
+    simCharts[id]._series = simCharts[id].addCandlestickSeries({
+      upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
+      borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
+    simCharts[id]._vwap = simCharts[id]._series.createPriceLine({color:'#fbbf24',lineWidth:1,lineStyle:2,title:'VWAP'});
+    simCharts[id]._orh = simCharts[id]._series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
+    simCharts[id]._orl = simCharts[id]._series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
+  }
+  return simCharts[id];
+}
+async function refreshSim() {
+  // charts need a visible container — wait until the tab is active
+  const pane = document.getElementById('pane-fno');
+  if (pane && !pane.classList.contains('active')) return;
+  try {
+    const d = await (await fetch('/api/sim')).json();
+    for (const [key, el] of [['FUT','sim-fut'],['CE','sim-ce'],['PE','sim-pe']]) {
+      const ch = simChart(el); const s = ch._series;
+      s.setData(d[key].candles);
+      if (d[key].vwap != null) ch._vwap.applyOptions({price: d[key].vwap});
+      if (d[key].orh != null) ch._orh.applyOptions({price: d[key].orh});
+      if (d[key].orl != null) ch._orl.applyOptions({price: d[key].orl});
+      s.setMarkers(d[key].markers || []);
+      ch.timeScale().fitContent();
+    }
+    const t = d.telemetry || {};
+    document.getElementById('sim-telemetry').innerHTML =
+      `ATM Strike <b>${d.atm_strike}</b> · State <b class="${t.state==='BUY_CALL'||t.state==='BUY_PUT'?'up':t.state==='THETA_DECAY'||t.state==='EXHAUSTION'?'down':'flat'}">${t.state}</b> · ${t.detail||''} · Trades ${t.trades_today||0}/3`;
+    const led = (t.ledger||[]).map(x =>
+      `<div>${x.side} ${x.strike} @ ${x.entry} → ${x.exit ?? '—'} | <b class="${(x.pnl_inr||0)>=0?'up':'down'}">₹${x.pnl_inr ?? '—'}</b> ${x.exit_reason||''}</div>`).join('');
+    const act = t.active ? `<div style="color:#fbbf24">OPEN ${t.active.side} ${t.active.strike} @ ${t.active.entry} → now ${t.active.last||'—'}</div>` : '';
+    document.getElementById('sim-ledger').innerHTML = act + led || '<span style="color:#64748b">No trades yet</span>';
+  } catch (e) {}
+}
+refreshSim();
+setInterval(refreshSim, 3000);
 
 // ---- Trend & momentum quick check ----------------------------------------
 async function checkSymbol() {
@@ -899,6 +969,7 @@ def create_app(
     active_scanner=None,
     momentum_scanner=None,
     performance=None,
+    sim=None,
 ) -> FastAPI:
     """Build the FastAPI application bound to a running MarketWatch."""
     app = FastAPI(title="Groww Market Watch", version="1.0.0")
@@ -1126,6 +1197,84 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+    # ------------------------------------------------------------------
+    # F&O simulation endpoint
+    # ------------------------------------------------------------------
+    @app.get("/api/sim")
+    async def sim_state() -> dict:
+        if sim is None:
+            raise HTTPException(status_code=503, detail="Sim not available")
+        from analyzer import atr, classify, opening_range, rvol, session_vwap
+
+        feed, trader = sim["feed"], sim["trader"]
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        base_ts = int(_dt.now(_ZI("Asia/Kolkata")).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        data = {}
+        for kind in ("FUT", "CE", "PE"):
+            bars = feed.candles(kind, 5, 78)
+            candles = [
+                {"time": base_ts + int(b["time"]) * 60, "open": b["open"], "high": b["high"],
+                 "low": b["low"], "close": b["close"]} for b in bars
+            ]
+            data[kind] = {
+                "candles": candles,
+                "vwap": session_vwap(bars),
+                "orh": opening_range(bars)[0],
+                "orl": opening_range(bars)[1],
+                "markers": [],
+            }
+
+        fut, ce, pe = data["FUT"]["candles"], data["CE"]["candles"], data["PE"]["candles"]
+        # rebuild bar dicts for analyzer (needs volume/oi)
+        fb = feed.candles("FUT", 5, 78); cb = feed.candles("CE", 5, 78); pb = feed.candles("PE", 5, 78)
+        verdict = classify(fb, cb, pb)
+
+        # paper-trade engine
+        spot = feed.snapshot()
+        ce_px = spot["prices"]["CE"]; pe_px = spot["prices"]["PE"]
+        fut_invalid = bool(fut) and abs(fut[-1]["close"] - fut[-1]["open"]) > 0 and False
+        opt_vwap_ce = data["CE"]["vwap"]; opt_vwap_pe = data["PE"]["vwap"]
+
+        entered = trader.try_enter(verdict["state"], "CE", ce_px, spot["atm_strike"])
+        if not entered:
+            entered = trader.try_enter(verdict["state"], "PE", pe_px, spot["atm_strike"])
+
+        # exits
+        if trader.position:
+            side = trader.position["side"]
+            px = ce_px if side == "CE" else pe_px
+            vwap = opt_vwap_ce if side == "CE" else opt_vwap_pe
+            candles_side = ce if side == "CE" else pe
+            opt_break = bool(vwap and candles_side and candles_side[-1]["close"] < vwap)
+            last = trader.try_exit(side, px, fut_invalid=fut_invalid, opt_vwap_break=opt_break)
+            if trader.position:
+                trader.position["last"] = px
+                trader.position["unreal_pnl"] = round((px - trader.position["entry"]) * trader.position["qty"], 2)
+
+        # markers on option charts from ledger + current entry
+        for t in trader.ledger[-10:]:
+            mk = {"time": int(t.get("entry_time", 0)) % 86400 // 60 + 0, "position": "belowBar",
+                  "color": "#4ade80" if t.get("pnl_points", 0) > 0 else "#f87171",
+                  "shape": "arrowUp" if t["side"] == "CE" else "arrowDown", "text": t["side"]}
+            # place at nearest candle time
+            series = data[t["side"]]["candles"]
+            if series:
+                mk["time"] = series[min(len(series)-1, max(0, len(series)-1))]["time"]
+                data[t["side"]]["markers"].append(mk)
+        if trader.position:
+            series = data[trader.position["side"]]["candles"]
+            if series:
+                data[trader.position["side"]]["markers"].append({
+                    "time": series[-1]["time"], "position": "belowBar", "color": "#fbbf24",
+                    "shape": "circle", "text": "OPEN"})
+
+        telemetry = trader.summary()
+        telemetry["state"] = verdict["state"]
+        telemetry["detail"] = verdict["detail"]
+        return {"atm_strike": spot["atm_strike"], "spot": spot["spot"],
+                **{k: data[k] for k in ("FUT", "CE", "PE")}, "telemetry": telemetry}
+
     return app
 
 
@@ -1195,9 +1344,32 @@ def run_web(
         logger.info("Scanners disabled for data_source=%s.", settings.data_source)
         performance = None
 
+    # F&O intraday simulation engine (mock feed)
+    sim = None
+    if settings.data_source in {"yahoo", "demo"}:
+        try:
+            import yfinance as yf
+            seed = float(yf.Ticker("^NSEI").fast_info.last_price)
+        except Exception:
+            seed = 25000.0
+        from data_feed import SimFeed
+        from simulator import PaperTrader
+
+        feed = SimFeed(spot_seed=seed)
+        trader = PaperTrader()
+
+        def _tick_loop() -> None:
+            import time as _t
+            while True:
+                feed.tick()
+                _t.sleep(0.4)
+
+        threading.Thread(target=_tick_loop, daemon=True).start()
+        sim = {"feed": feed, "trader": trader, "markers": []}
+
     app = create_app(
         watch, settings, scanner=scanner, active_scanner=active_scanner,
-        momentum_scanner=momentum_scanner, performance=performance,
+        momentum_scanner=momentum_scanner, performance=performance, sim=sim,
     )
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
