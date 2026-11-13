@@ -53,10 +53,8 @@ FORMAT: GitHub-flavored markdown with clear section headers. Be concise but comp
 # ---------------------------------------------------------------------------
 # Data collection
 # ---------------------------------------------------------------------------
-def _yahoo_symbol(inst: Instrument) -> str:
-    from market_watch import MarketWatch
-
-    return MarketWatch._YAHOO_INDEX_MAP.get(inst.symbol, f"^{inst.symbol}") if inst.kind == "INDEX" else f"{inst.symbol}.NS"
+def _yahoo_symbol(watch: MarketWatch, inst: Instrument) -> str:
+    return watch._yahoo_symbol(inst)
 
 
 def _rsi(closes: list[float], period: int = 14) -> Optional[float]:
@@ -148,7 +146,7 @@ def collect_market_data(watch: MarketWatch, logger: logging.Logger) -> dict:
             "symbol": inst.symbol,
             "kind": inst.kind,
             "exchange": inst.exchange,
-            "yahoo_ticker": _yahoo_symbol(inst),
+            "yahoo_ticker": _yahoo_symbol(watch, inst),
         }
         q = quotes.get(inst.symbol, {})
         entry["quote"] = {
@@ -437,7 +435,7 @@ def run_local_analysis(watch: MarketWatch, settings: Settings, logger: logging.L
             bear_entry, bear_score = scored[1]
     elif scored:
         bull_entry, bull_score = scored[0]
-        bear_entry, bear_score = scored[0], scored[0][1]
+        bear_entry, bear_score = scored[0]
     else:
         raise RuntimeError("No instrument data collected — check symbols and data source.")
 

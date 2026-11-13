@@ -185,11 +185,15 @@ class MarketWatch:
     def snapshot(self) -> list[dict]:
         """Return a JSON-serialisable snapshot of all current quotes."""
         with self._lock:
-            quotes = list(self._quotes.values())
+            rows = [
+                (q, self._instruments[q.symbol])
+                for q in self._quotes.values()
+                if q.symbol in self._instruments
+            ]
         return [
             {
                 "symbol": q.symbol,
-                "kind": self._instruments[q.symbol].kind,
+                "kind": inst.kind,
                 "ltp": q.ltp,
                 "change_pct": q.change_pct,
                 "volume": q.volume,
@@ -197,7 +201,7 @@ class MarketWatch:
                 "updated_at": q.updated_at,
                 "age_seconds": round(q.age_seconds, 1),
             }
-            for q in sorted(quotes, key=lambda x: x.symbol)
+            for q, inst in sorted(rows, key=lambda x: x[0].symbol)
         ]
 
     def refresh_once(self) -> None:
@@ -300,8 +304,17 @@ class MarketWatch:
         "NIFTYNXT50": "^NIFTYNXT50",
     }
 
+    # Common ticker aliases -> Yahoo symbol (users often type short names)
+    _YAHOO_ALIASES: Dict[str, str] = {
+        "HDFC": "HDFCBANK.NS",
+        "Reliance": "RELIANCE.NS",
+    }
+
     def _yahoo_symbol(self, inst: Instrument) -> str:
         """Map a watchlist instrument to its Yahoo Finance ticker."""
+        alias = self._YAHOO_ALIASES.get(inst.symbol.upper())
+        if alias:
+            return alias
         if inst.kind == "INDEX":
             return self._YAHOO_INDEX_MAP.get(inst.symbol, f"^{inst.symbol}")
         return f"{inst.symbol}.NS"
@@ -628,11 +641,14 @@ class MarketWatch:
         table.add_column("Age", justify="right", min_width=6)
 
         with self._lock:
-            quotes = dict(self._quotes)
+            rows = [
+                (quotes[symbol], self._instruments[symbol])
+                for symbol in quotes
+                if symbol in self._instruments
+            ]
 
-        for symbol in sorted(quotes):
-            inst = self._instruments[symbol]
-            q = quotes[symbol]
+        for q, inst in rows:
+            symbol = q.symbol
             table.add_row(
                 symbol,
                 inst.kind,

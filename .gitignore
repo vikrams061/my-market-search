@@ -13,3 +13,5 @@ venv/
 *.log
 market_watch.log
 watchlist.json
+picks.json
+active_picks.json

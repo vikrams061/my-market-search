@@ -91,6 +91,23 @@ INDEX_HTML = """<!DOCTYPE html>
   #report ul, #report ol { padding-left: 1.4rem; }
   #report blockquote { border-left: 3px solid #334155; margin: .75rem 0;
                        padding-left: 1rem; color: #94a3b8; }
+  .picks { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  .pick-card { background: #1e293b; border-radius: 10px; padding: 1.1rem 1.3rem; }
+  .pick-card.bull { border-left: 4px solid #4ade80; }
+  .pick-card.bear { border-left: 4px solid #f87171; }
+  .pick-card h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
+  .pick-card .score { font-size: .8rem; color: #94a3b8; }
+  .pick-card .ltp { font-size: 1.5rem; font-weight: 700; margin: .4rem 0 .1rem; }
+  .pick-card .meta { font-size: .8rem; color: #94a3b8; line-height: 1.7; }
+  .pick-card .move { font-size: .85rem; font-weight: 600; }
+  .up { color: #4ade80; } .down { color: #f87171; } .flat { color: #94a3b8; }
+  .lists { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  .mini-list { background: #1e293b; border-radius: 10px; padding: .8rem 1.1rem; font-size: .85rem; }
+  .mini-list h4 { margin: .2rem 0 .5rem; font-size: .85rem; color: #cbd5e1; }
+  .mini-list div { display: flex; justify-content: space-between; padding: .15rem 0; }
+  .scan-btn { background: #0ea5e9; color:#fff; border:none; border-radius:8px;
+              padding:.5rem 1rem; font-size:.85rem; cursor:pointer; margin-left:.75rem; }
+  .scan-btn:disabled { opacity:.5; cursor:wait; }
   table { width: 100%; border-collapse: collapse; background: #1e293b;
           border-radius: 10px; overflow: hidden; }
   th, td { padding: .7rem 1rem; text-align: left; }
@@ -137,6 +154,26 @@ INDEX_HTML = """<!DOCTYPE html>
     <button id="analyze-btn" onclick="runAnalysis()">Run Momentum Analysis</button>
     <div id="analysis-status"></div>
     <div id="report"></div>
+  </div>
+
+  <div class="analyst">
+    <h2>Today's NIFTY 50 Picks
+      <button class="scan-btn" id="scan-btn" onclick="startScan()">Rescan</button>
+    </h2>
+    <div id="scan-status" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
+    <div class="picks" id="pick-cards"></div>
+    <div class="lists">
+      <div class="mini-list"><h4>Top 5 Bullish</h4><div id="top5"></div></div>
+      <div class="mini-list"><h4>Top 5 Bearish</h4><div id="bottom5"></div></div>
+    </div>
+  </div>
+
+  <div class="analyst">
+    <h2>Today's Active Stock Picks
+      <button class="scan-btn" id="active-scan-btn" onclick="startActiveScan()">Rescan</button>
+    </h2>
+    <div id="active-scan-status" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
+    <div class="picks" id="active-cards"></div>
   </div>
 <script>
 const REFRESH_MS = 2000;
@@ -249,9 +286,124 @@ async function pollAnalysis() {
   } catch (e) { /* keep polling */ }
 }
 
+// ---- NIFTY 50 scanner ----------------------------------------------------
+const fmtInr = v => v == null ? '—' : '₹' + Number(v).toLocaleString('en-IN', {maximumFractionDigits: 2});
+const cls = v => v == null ? 'flat' : (v > 0 ? 'up' : v < 0 ? 'down' : 'flat');
+const sgn = v => v == null ? '' : (v > 0 ? '+' : '');
+
+function pickCard(title, clsName, p, note) {
+  if (!p) return `<div class="pick-card ${clsName}"><h3>${title}</h3><div class="meta">No data</div></div>`;
+  const t = p.technicals || {};
+  const mv = p.movement || 0;
+  return `<div class="pick-card ${clsName}">
+    <h3>${p.symbol}</h3>
+    <div class="score">Momentum ${p.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
+    <div class="ltp">${fmtInr(p.quote && p.quote.ltp)}</div>
+    <div class="move ${cls(p.quote && p.quote.change_pct)}">${sgn(p.quote && p.quote.change_pct)}${p.quote && p.quote.change_pct != null ? p.quote.change_pct.toFixed(2) : '—'}% today</div>
+    <div class="meta">Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'} 20d avg ·
+      EMA20 ${fmtInr(t.ema_20)} · EMA50 ${fmtInr(t.ema_50)}<br>
+      <span class="move ${cls(mv)}">Δ ${sgn(mv)}${mv.toFixed(2)} since last poll</span>${note ? '<br>' + note : ''}
+      ${p.targets ? `<br>T1 ${fmtInr(p.targets.t1)} (${p.targets.t1_tf}) · T2 ${fmtInr(p.targets.t2)} (${p.targets.t2_tf}) · SL ${fmtInr(p.targets.sl)}` : ''}</div>
+  </div>`;
+}
+
+async function refreshPicks() {
+  try {
+    const res = await fetch('/api/picks');
+    const d = await res.json();
+    const cards = document.getElementById('pick-cards');
+    if (d.status !== 'ready' || !d.picks) {
+      cards.innerHTML = '<div class="meta" style="color:#64748b">No pick for today yet — click Rescan.</div>';
+      return;
+    }
+    const p = d.picks;
+    cards.innerHTML =
+      pickCard('Bullish Pick', 'bull', p.bullish) +
+      pickCard('Bearish Pick', 'bear', p.bearish, p.bearish_note);
+    const fill = (id, arr) => document.getElementById(id).innerHTML =
+      (arr || []).map(e => `<div><span>${e.symbol}</span><span>${e.score} · ${fmtInr(e.cmp)}</span></div>`).join('');
+    fill('top5', p.top5); fill('bottom5', p.bottom5);
+  } catch (e) { /* keep polling */ }
+}
+
+async function scanStatus() {
+  try {
+    const res = await fetch('/api/scan/status');
+    const d = await res.json();
+    document.getElementById('scan-status').textContent =
+      d.status === 'running' ? `Scanning NIFTY 50… ${d.progress || ''}` :
+      d.status === 'done' ? `Last scan: ${d.progress || ''} symbols` : '';
+    document.getElementById('scan-btn').disabled = d.status === 'running';
+  } catch (e) {}
+}
+
+async function startScan() {
+  document.getElementById('scan-btn').disabled = true;
+  await fetch('/api/scan', {method: 'POST'});
+  setInterval(scanStatus, 2000);
+  scanStatus();
+}
+
+// ---- Active stocks scanner ----------------------------------------------
+function renderActivePicks(d) {
+  const cards = document.getElementById('active-cards');
+  if (d.status !== 'ready' || !d.picks) {
+    cards.innerHTML = '<div class="meta" style="color:#64748b">No active-stock pick for today yet — click Rescan.</div>';
+    return;
+  }
+  const p = d.picks;
+  const card = (title, clsName, pk, note) => {
+    if (!pk) return `<div class="pick-card ${clsName}"><h3>${title}</h3><div class="meta">No data</div></div>`;
+    const t = pk.technicals || {};
+    const mv = pk.movement || 0;
+    const tg = pk.targets;
+    return `<div class="pick-card ${clsName}">
+      <h3>${pk.symbol}</h3>
+      <div class="score">Momentum ${pk.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
+      <div class="ltp">${fmtInr(pk.quote && pk.quote.ltp)}</div>
+      <div class="move ${cls(pk.quote && pk.quote.change_pct)}">${sgn(pk.quote && pk.quote.change_pct)}${pk.quote && pk.quote.change_pct != null ? pk.quote.change_pct.toFixed(2) : '—'}% today</div>
+      <div class="meta">Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'} 20d avg ·
+        <span class="move ${cls(mv)}">Δ ${sgn(mv)}${mv.toFixed(2)}</span><br>
+        ${tg ? `T1 ${fmtInr(tg.t1)} (${tg.t1_tf}) · T2 ${fmtInr(tg.t2)} (${tg.t2_tf}) · SL ${fmtInr(tg.sl)}` : ''}${note ? '<br>' + note : ''}</div>
+    </div>`;
+  };
+  cards.innerHTML = card('Active Bullish Pick', 'bull', p.bullish) + card('Active Bearish Pick', 'bear', p.bearish, p.bearish_note);
+}
+
+async function refreshActivePicks() {
+  try {
+    const res = await fetch('/api/active/picks');
+    renderActivePicks(await res.json());
+  } catch (e) {}
+}
+
+async function activeScanStatus() {
+  try {
+    const res = await fetch('/api/active/scan/status');
+    const d = await res.json();
+    document.getElementById('active-scan-status').textContent =
+      d.status === 'running' ? `Scanning active stocks… ${d.progress || ''}` :
+      d.status === 'done' ? `Last scan: ${d.progress || ''} symbols` : '';
+    document.getElementById('active-scan-btn').disabled = d.status === 'running';
+  } catch (e) {}
+}
+
+async function startActiveScan() {
+  document.getElementById('active-scan-btn').disabled = true;
+  await fetch('/api/active/scan', {method: 'POST'});
+  setInterval(activeScanStatus, 2000);
+  activeScanStatus();
+}
+
 tick();
 setInterval(tick, REFRESH_MS);
 pollAnalysis();  // show last generated report (if any) on page load
+refreshPicks();
+setInterval(refreshPicks, 15000);
+scanStatus();
+refreshActivePicks();
+setInterval(refreshActivePicks, 15000);
+activeScanStatus();
 </script>
 </body>
 </html>
@@ -291,7 +443,7 @@ def _save_watchlist(watch: MarketWatch) -> None:
         pass
 
 
-def create_app(watch: MarketWatch, settings: Settings) -> FastAPI:
+def create_app(watch: MarketWatch, settings: Settings, scanner=None, active_scanner=None) -> FastAPI:
     """Build the FastAPI application bound to a running MarketWatch."""
     app = FastAPI(title="Groww Market Watch", version="1.0.0")
 
@@ -370,6 +522,44 @@ def create_app(watch: MarketWatch, settings: Settings) -> FastAPI:
         with analysis_lock:
             return dict(analysis_state)
 
+    # ------------------------------------------------------------------
+    # NIFTY 50 scanner endpoints
+    # ------------------------------------------------------------------
+    @app.post("/api/scan", status_code=202)
+    async def start_scan() -> dict:
+        if scanner is None:
+            raise HTTPException(status_code=503, detail="Scanner not available")
+        if not scanner.start_scan():
+            raise HTTPException(status_code=409, detail="Scan already running")
+        return {"status": "running"}
+
+    @app.get("/api/scan/status")
+    async def scan_status() -> dict:
+        return scanner.status() if scanner else {"status": "unavailable"}
+
+    @app.get("/api/picks")
+    async def get_picks() -> dict:
+        return scanner.today_picks() if scanner else {"status": "unavailable"}
+
+    # ------------------------------------------------------------------
+    # Active stocks scanner endpoints
+    # ------------------------------------------------------------------
+    @app.post("/api/active/scan", status_code=202)
+    async def start_active_scan() -> dict:
+        if active_scanner is None:
+            raise HTTPException(status_code=503, detail="Scanner not available")
+        if not active_scanner.start_scan():
+            raise HTTPException(status_code=409, detail="Scan already running")
+        return {"status": "running"}
+
+    @app.get("/api/active/scan/status")
+    async def active_scan_status() -> dict:
+        return active_scanner.status() if active_scanner else {"status": "unavailable"}
+
+    @app.get("/api/active/picks")
+    async def get_active_picks() -> dict:
+        return active_scanner.today_picks() if active_scanner else {"status": "unavailable"}
+
     return app
 
 
@@ -416,7 +606,22 @@ def run_web(
         settings.use_feed,
     )
 
-    app = create_app(watch, settings)
+    # NIFTY 50 + active-stocks scanners — auto-scan on startup if needed
+    scanner = None
+    active_scanner = None
+    if settings.data_source in {"yahoo", "demo"}:
+        from scanner import ACTIVE_STOCKS, NiftyScanner
+
+        scanner = NiftyScanner(logger)
+        scanner.ensure_today()
+        active_scanner = NiftyScanner(
+            logger, symbols=ACTIVE_STOCKS, picks_file="active_picks.json"
+        )
+        active_scanner.ensure_today()
+    else:
+        logger.info("Scanners disabled for data_source=%s.", settings.data_source)
+
+    app = create_app(watch, settings, scanner=scanner, active_scanner=active_scanner)
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     except KeyboardInterrupt:
