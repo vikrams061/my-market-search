@@ -112,7 +112,7 @@ class MarketWatch:
             self._settings.poll_interval,
         )
 
-        if self._settings.use_feed and not self._settings.demo_mode:
+        if self._settings.use_feed and self._groww is not None:
             self._start_feed()
 
         try:
@@ -162,6 +162,26 @@ class MarketWatch:
         if self._worker_thread is not None and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=5)
 
+    def add_instrument(self, inst: Instrument) -> bool:
+        """Add an instrument to the watchlist. Returns True if added."""
+        with self._lock:
+            if inst.symbol in self._instruments:
+                return False
+            self._instruments[inst.symbol] = inst
+            self._quotes[inst.symbol] = Quote(symbol=inst.symbol)
+        self._logger.info("Added %s (%s) to watchlist.", inst.symbol, inst.kind)
+        return True
+
+    def remove_instrument(self, symbol: str) -> bool:
+        """Remove an instrument from the watchlist. Returns True if removed."""
+        with self._lock:
+            if symbol not in self._instruments:
+                return False
+            del self._instruments[symbol]
+            self._quotes.pop(symbol, None)
+        self._logger.info("Removed %s from watchlist.", symbol)
+        return True
+
     def snapshot(self) -> list[dict]:
         """Return a JSON-serialisable snapshot of all current quotes."""
         with self._lock:
@@ -182,8 +202,7 @@ class MarketWatch:
 
     def refresh_once(self) -> None:
         """Perform a single quote refresh cycle (used by background mode)."""
-        workers = min(8, max(2, len(self._instruments)))
-        self._refresh_quotes(workers)
+        self._refresh_quotes()
 
     def start_background(self) -> threading.Thread:
         """Start quote polling (and feed, if enabled) in a daemon thread.
@@ -191,7 +210,7 @@ class MarketWatch:
         Used by the web UI so the HTTP server can serve data concurrently.
         Returns the worker thread.
         """
-        if self._settings.use_feed and not self._settings.demo_mode:
+        if self._settings.use_feed and self._groww is not None:
             self._start_feed()
 
         self._worker_thread = threading.Thread(
@@ -215,11 +234,9 @@ class MarketWatch:
     # ------------------------------------------------------------------
     def _polling_loop(self, live: Live) -> None:
         """Continuously refresh quotes and update the live display."""
-        workers = min(8, max(2, len(self._instruments)))
-
         while not self._stop_event.is_set():
             started = time.monotonic()
-            self._refresh_quotes(workers)
+            self._refresh_quotes()
             live.update(self._render())
 
             elapsed = time.monotonic() - started
@@ -227,13 +244,18 @@ class MarketWatch:
             if sleep_for:
                 self._stop_event.wait(sleep_for)
 
-    def _refresh_quotes(self, workers: int) -> None:
+    def _refresh_quotes(self) -> None:
         """Fetch quotes for all instruments in parallel."""
         errors = 0
+        with self._lock:
+            instruments = list(self._instruments.values())
+        if not instruments:
+            return
+        workers = min(8, max(2, len(instruments)))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="quote") as pool:
             futures = {
                 pool.submit(self._fetch_quote, inst): inst
-                for inst in self._instruments.values()
+                for inst in instruments
             }
             for future in as_completed(futures):
                 inst = futures[future]
@@ -269,10 +291,27 @@ class MarketWatch:
         "BANKNIFTY": 52000.0,
     }
 
+    # Yahoo Finance tickers for common NSE indices
+    _YAHOO_INDEX_MAP: Dict[str, str] = {
+        "NIFTY": "^NSEI",
+        "BANKNIFTY": "^NSEBANK",
+        "FINNIFTY": "^CNXFIN",
+        "MIDCPNIFT": "^CNXMID",
+        "NIFTYNXT50": "^NIFTYNXT50",
+    }
+
+    def _yahoo_symbol(self, inst: Instrument) -> str:
+        """Map a watchlist instrument to its Yahoo Finance ticker."""
+        if inst.kind == "INDEX":
+            return self._YAHOO_INDEX_MAP.get(inst.symbol, f"^{inst.symbol}")
+        return f"{inst.symbol}.NS"
+
     def _fetch_quote(self, inst: Instrument) -> Optional[Quote]:
-        """Fetch a single quote via REST and return a ``Quote`` snapshot."""
+        """Fetch a single quote via the configured data source."""
         if self._settings.demo_mode:
             return self._demo_quote(inst)
+        if self._settings.data_source == "yahoo":
+            return self._fetch_yahoo_quote(inst)
         try:
             resp = self._groww.get_quote(
                 exchange=inst.exchange,
@@ -311,6 +350,53 @@ class MarketWatch:
             ltt = int(ltt) if ltt is not None else None
         except (TypeError, ValueError):
             ltt = None
+
+        return Quote(
+            symbol=inst.symbol,
+            ltp=ltp,
+            change_pct=change_pct,
+            volume=volume,
+            last_trade_time=ltt,
+        )
+
+    def _fetch_yahoo_quote(self, inst: Instrument) -> Quote:
+        """Fetch a quote from Yahoo Finance via yfinance (delayed data)."""
+        import yfinance as yf
+
+        ticker = yf.Ticker(self._yahoo_symbol(inst))
+
+        ltp: Optional[float] = None
+        volume: Optional[int] = None
+        ltt: Optional[int] = None
+        prev_close: Optional[float] = None
+
+        try:
+            hist = ticker.history(period="1d", interval="1m", auto_adjust=False)
+            if hist is not None and not hist.empty:
+                ltp = float(hist["Close"].iloc[-1])
+                if "Volume" in hist:
+                    vol = int(hist["Volume"].sum())
+                    volume = vol or None
+                ltt = int(hist.index[-1].timestamp() * 1000)
+                opens = hist["Open"].dropna()
+                if not opens.empty:
+                    prev_close = float(opens.iloc[0])
+        except Exception as exc:
+            self._logger.debug("yfinance history failed for %s: %s", inst.symbol, exc)
+
+        # fast_info is a lighter fallback / supplement for price + prev close
+        try:
+            fi = ticker.fast_info
+            if ltp is None and getattr(fi, "last_price", None):
+                ltp = float(fi.last_price)
+            if prev_close is None and getattr(fi, "previous_close", None):
+                prev_close = float(fi.previous_close)
+        except Exception as exc:
+            self._logger.debug("yfinance fast_info failed for %s: %s", inst.symbol, exc)
+
+        change_pct: Optional[float] = None
+        if ltp is not None and prev_close:
+            change_pct = (ltp / prev_close - 1.0) * 100.0
 
         return Quote(
             symbol=inst.symbol,

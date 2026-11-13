@@ -59,6 +59,9 @@ def main() -> int:
     if settings.demo_mode:
         logger.warning("DEMO MODE — showing simulated data, not real market prices.")
         groww = None
+    elif settings.data_source == "yahoo":
+        logger.info("Data source: Yahoo Finance (delayed data, no Groww auth needed).")
+        groww = None
     else:
         try:
             groww = create_client(settings, logger)

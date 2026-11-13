@@ -4,3 +4,4 @@ rich>=13.0.0
 pyotp>=2.9.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
+yfinance>=0.2.40

@@ -12,12 +12,20 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 import uvicorn
 
-from config import Settings, build_watchlist, create_client, setup_logging
+from config import Instrument, Settings, create_client, setup_logging
 from market_watch import MarketWatch
+
+
+class InstrumentIn(BaseModel):
+    """Request body for adding an instrument to the watchlist."""
+
+    symbol: str = Field(min_length=1, max_length=30)
+    kind: str = Field(pattern="^(EQ|INDEX)$")
 
 # ---------------------------------------------------------------------------
 # Embedded single-page frontend
@@ -38,6 +46,24 @@ INDEX_HTML = """<!DOCTYPE html>
   }
   h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
   .sub { color: #94a3b8; font-size: .85rem; margin-bottom: 1.5rem; }
+  .controls { display: flex; gap: .5rem; margin-bottom: 1.25rem; }
+  .controls input, .controls select {
+    background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+    border-radius: 8px; padding: .55rem .8rem; font-size: .9rem;
+  }
+  .controls input { width: 220px; text-transform: uppercase; }
+  .controls button {
+    background: #6366f1; color: #fff; border: none; border-radius: 8px;
+    padding: .55rem 1.1rem; font-size: .9rem; cursor: pointer;
+  }
+  .controls button:hover { background: #4f46e5; }
+  .empty { color: #64748b; padding: 2rem; text-align: center;
+           background: #1e293b; border-radius: 10px; }
+  .del {
+    background: none; border: none; color: #64748b; cursor: pointer;
+    font-size: 1rem; padding: 0 .25rem;
+  }
+  .del:hover { color: #f87171; }
   table { width: 100%; border-collapse: collapse; background: #1e293b;
           border-radius: 10px; overflow: hidden; }
   th, td { padding: .7rem 1rem; text-align: left; }
@@ -58,14 +84,25 @@ INDEX_HTML = """<!DOCTYPE html>
 <body>
   <h1><span class="pulse"></span>Groww Market Watch</h1>
   <div class="sub" id="meta">Loading…</div>
+  <div class="controls">
+    <input id="sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
+    <select id="kind">
+      <option value="EQ">Equity</option>
+      <option value="INDEX">Index</option>
+    </select>
+    <button onclick="addInstrument()">+ Add</button>
+  </div>
   <table>
     <thead><tr>
       <th>Symbol</th><th>Type</th><th class="num">LTP</th>
       <th class="num">Chg %</th><th class="num">Volume</th>
-      <th class="num">Last Trade</th><th class="num">Age</th>
+      <th class="num">Last Trade</th><th class="num">Age</th><th></th>
     </tr></thead>
     <tbody id="rows"></tbody>
   </table>
+  <div id="empty" class="empty" style="display:none">
+    No instruments yet — add a symbol above to start watching.
+  </div>
   <div id="status"></div>
 <script>
 const REFRESH_MS = 2000;
@@ -81,12 +118,36 @@ const fmtLtt = ms => ms == null ? '—' : new Date(ms).toLocaleTimeString('en-IN
 const chgClass = v => v == null ? 'flat' : (v > 0 ? 'up' : v < 0 ? 'down' : 'flat');
 const chgText = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
 
+async function addInstrument() {
+  const sym = document.getElementById('sym').value.trim().toUpperCase();
+  const kind = document.getElementById('kind').value;
+  if (!sym) return;
+  const res = await fetch('/api/instruments', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({symbol: sym, kind: kind})
+  });
+  if (res.ok) {
+    document.getElementById('sym').value = '';
+    tick();
+  } else {
+    const err = await res.json();
+    alert(err.detail || 'Failed to add instrument');
+  }
+}
+
+async function removeInstrument(sym) {
+  await fetch('/api/instruments/' + encodeURIComponent(sym), {method: 'DELETE'});
+  tick();
+}
+
 async function tick() {
   try {
     const res = await fetch('/api/quotes');
     const data = await res.json();
     const rows = document.getElementById('rows');
     rows.innerHTML = '';
+    document.getElementById('empty').style.display = data.count ? 'none' : 'block';
     for (const q of data.quotes) {
       const tr = document.createElement('tr');
       tr.innerHTML =
@@ -96,7 +157,8 @@ async function tick() {
         `<td class="num ${chgClass(q.change_pct)}">${chgText(q.change_pct)}</td>` +
         `<td class="num">${fmtVol(q.volume)}</td>` +
         `<td class="num">${fmtLtt(q.last_trade_time)}</td>` +
-        `<td class="num">${q.age_seconds}s</td>`;
+        `<td class="num">${q.age_seconds}s</td>` +
+        `<td><button class="del" title="Remove" onclick="removeInstrument('${q.symbol}')">✕</button></td>`;
       rows.appendChild(tr);
     }
     document.getElementById('meta').textContent =
@@ -140,6 +202,23 @@ def create_app(watch: MarketWatch, settings: Settings) -> FastAPI:
     async def health() -> dict:
         return {"status": "ok", "instruments": len(watch.snapshot())}
 
+    @app.post("/api/instruments", status_code=201)
+    async def add_instrument(payload: InstrumentIn) -> dict:
+        symbol = payload.symbol.strip().upper()
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Symbol cannot be empty")
+        inst = Instrument(symbol=symbol, kind=payload.kind)
+        if not watch.add_instrument(inst):
+            raise HTTPException(status_code=409, detail=f"{symbol} already tracked")
+        return {"added": symbol, "kind": payload.kind}
+
+    @app.delete("/api/instruments/{symbol}")
+    async def remove_instrument(symbol: str) -> dict:
+        symbol = symbol.strip().upper()
+        if not watch.remove_instrument(symbol):
+            raise HTTPException(status_code=404, detail=f"{symbol} not tracked")
+        return {"removed": symbol}
+
     return app
 
 
@@ -156,9 +235,15 @@ def run_web(
     if settings.demo_mode:
         logger.warning("DEMO MODE — web UI will show simulated market data.")
         groww = None
+    elif settings.data_source == "yahoo":
+        logger.info("Data source: Yahoo Finance (delayed data, no Groww auth needed).")
+        groww = None
     else:
         groww = create_client(settings, logger)
-    instruments = build_watchlist(settings)
+
+    # Web UI starts with an empty watchlist — instruments are added via the page.
+    instruments = []
+    logger.info("Web UI watchlist starts empty; add symbols from the page.")
     watch = MarketWatch(
         groww=groww, instruments=instruments, settings=settings, logger=logger
     )
