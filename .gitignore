@@ -1,0 +1,14 @@
+# Secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Logs / runtime artefacts
+*.log
+market_watch.log
