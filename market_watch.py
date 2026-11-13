@@ -81,6 +81,7 @@ class MarketWatch:
         self._quotes: Dict[str, Quote] = {
             inst.symbol: Quote(symbol=inst.symbol) for inst in instruments
         }
+        self._ticks: Dict[str, list] = {}
         self._lock = threading.Lock()
 
         self._stop_event = threading.Event()
@@ -182,6 +183,20 @@ class MarketWatch:
         self._logger.info("Removed %s from watchlist.", symbol)
         return True
 
+    def live_candles(self, symbol: str, bucket_seconds: int = 60) -> list[dict]:
+        """Build OHLC candles from recorded live ticks for a symbol."""
+        ticks = self._ticks.get(symbol.upper(), [])
+        if not ticks:
+            return []
+        buckets: dict[int, dict] = {}
+        for ts, px in ticks:
+            bk = int(ts // bucket_seconds) * bucket_seconds
+            c = buckets.setdefault(bk, {"time": bk, "open": px, "high": px, "low": px, "close": px})
+            c["high"] = max(c["high"], px)
+            c["low"] = min(c["low"], px)
+            c["close"] = px
+        return list(buckets.values())[-120:]
+
     def snapshot(self) -> list[dict]:
         """Return a JSON-serialisable snapshot of all current quotes."""
         with self._lock:
@@ -268,6 +283,12 @@ class MarketWatch:
                     if quote is not None:
                         with self._lock:
                             self._quotes[inst.symbol] = quote
+                            if quote.ltp is not None:
+                                self._ticks.setdefault(inst.symbol, []).append(
+                                    (time.time(), quote.ltp)
+                                )
+                                if len(self._ticks[inst.symbol]) > 20000:
+                                    self._ticks[inst.symbol] = self._ticks[inst.symbol][-10000:]
                 except Exception as exc:
                     errors += 1
                     self._logger.warning("Quote fetch failed for %s: %s", inst.symbol, exc)

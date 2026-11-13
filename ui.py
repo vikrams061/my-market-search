@@ -108,6 +108,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .scan-btn { background: #0ea5e9; color:#fff; border:none; border-radius:8px;
               padding:.5rem 1rem; font-size:.85rem; cursor:pointer; margin-left:.75rem; }
   .scan-btn:disabled { opacity:.5; cursor:wait; }
+  .tf-btn.active { background:#4f46e5; }
   .perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; margin: .75rem 0; }
   .perf-stat { background: #1e293b; border-radius: 10px; padding: .8rem 1rem; }
   .perf-stat .label { font-size: .72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .04em; }
@@ -182,6 +183,18 @@ INDEX_HTML = """<!DOCTYPE html>
     No instruments yet — add a symbol above to start watching.
   </div>
   <div id="status"></div>
+
+  <div class="analyst">
+    <h2>NIFTY Live Chart
+      <span class="meta" style="font-size:.75rem;color:#64748b">candles from market-watch ticks</span>
+      <span style="margin-left:.75rem">
+        <button class="scan-btn tf-btn active" data-tf="1" onclick="setTf(1,this)">1m</button>
+        <button class="scan-btn tf-btn" data-tf="5" onclick="setTf(5,this)">5m</button>
+        <button class="scan-btn tf-btn" data-tf="15" onclick="setTf(15,this)">15m</button>
+      </span>
+    </h2>
+    <div id="nifty-chart" style="height:320px"></div>
+  </div>
 
   <div class="analyst">
     <h2>Trade Tracker</h2>
@@ -367,6 +380,7 @@ INDEX_HTML = """<!DOCTYPE html>
   </div>
   </div><!-- /pane-fno -->
 
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
@@ -636,6 +650,54 @@ async function refreshSim() {
 }
 refreshSim();
 setInterval(refreshSim, 3000);
+
+// ---- NIFTY live chart (candles built from market-watch ticks) -------------
+let niftyChart = null, niftySeries = null, chartTf = 1;
+function setTf(mins, btn) {
+  chartTf = mins;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  refreshNiftyChart();
+}
+function initNiftyChart() {
+  if (niftyChart) return;
+  if (typeof LightweightCharts === 'undefined') {
+    setTimeout(initNiftyChart, 1000);  // retry until CDN lib loads
+    return;
+  }
+  niftyChart = LightweightCharts.createChart(document.getElementById('nifty-chart'),
+    {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
+     grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
+     timeScale:{borderColor:'#334155'},rightPriceScale:{borderColor:'#334155'}});
+  niftySeries = niftyChart.addCandlestickSeries({
+    upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
+    borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
+  refreshNiftyChart();
+  setInterval(refreshNiftyChart, 10000);
+}
+async function refreshNiftyChart() {
+  if (!niftySeries) return;
+  try {
+    let d = await (await fetch(`/api/livechart?symbol=NIFTY&bucket=${chartTf * 60}`)).json();
+    if (!d.candles || d.candles.length < 2) {
+      const iv = chartTf === 1 ? '1m' : chartTf === 5 ? '5m' : '15m';
+      d = await (await fetch(`/api/chart?symbol=NIFTY&kind=INDEX&interval=${iv}`)).json();
+    }
+    // livechart returns OHLC; chart returns OHLC too — use as-is
+    if (d.candles && d.candles.length) {
+      niftySeries.setData(d.candles);
+      // B/S marker on each candle (last 120 for readability)
+      niftySeries.setMarkers(d.candles.slice(-120).map(c => {
+        const up = c.close >= c.open;
+        return {time: c.time, position: up ? 'belowBar' : 'aboveBar',
+                color: up ? '#4ade80' : '#f87171', shape: 'circle',
+                text: up ? 'B' : 'S'};
+      }));
+      niftyChart.timeScale().fitContent();
+    }
+  } catch (e) {}
+}
+initNiftyChart();
 
 // ---- Trend & momentum quick check ----------------------------------------
 async function checkSymbol() {
@@ -991,6 +1053,35 @@ def create_app(
                 "feed": settings.use_feed,
             }
         )
+
+    @app.get("/api/livechart")
+    async def livechart(symbol: str, bucket: int = 60) -> dict:
+        candles = watch.live_candles(symbol, min(max(bucket, 15), 300))
+        return {"candles": candles}
+
+    @app.get("/api/chart")
+    async def chart(symbol: str, kind: str = "EQ", interval: str = "15m") -> dict:
+        import yfinance as yf
+
+        idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^CNXFIN"}
+        alias = {"HDFC": "HDFCBANK.NS"}.get(symbol.upper())
+        ys = alias or (
+            idx_map.get(symbol.upper(), f"^{symbol.upper()}")
+            if kind.upper() == "INDEX" else f"{symbol.upper()}.NS"
+        )
+        try:
+            df = yf.Ticker(ys).history(period="5d", interval=interval, auto_adjust=False)
+            if df is None or df.empty:
+                return {"candles": []}
+            candles = [
+                {"time": int(ts.timestamp()), "open": round(float(r["Open"]), 2),
+                 "high": round(float(r["High"]), 2), "low": round(float(r["Low"]), 2),
+                 "close": round(float(r["Close"]), 2)}
+                for ts, r in df.iterrows()
+            ]
+            return {"candles": candles}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get("/api/health")
     async def health() -> dict:
