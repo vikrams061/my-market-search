@@ -12,3 +12,4 @@ venv/
 # Logs / runtime artefacts
 *.log
 market_watch.log
+watchlist.json

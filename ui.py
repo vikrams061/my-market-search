@@ -1,4 +1,4 @@
-"""Web UI for the Groww Real-Time Market Watch.
+"""Web UI for the Real-Time Market Watch.
 
 Serves a single-page dashboard (embedded HTML/JS) plus a JSON quotes API.
 The page auto-refreshes every couple of seconds and renders LTP, day change %,
@@ -9,8 +9,12 @@ Run via ``python main.py --web`` or directly ``python ui.py``.
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 from typing import Optional
+
+import markdown
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -64,6 +68,29 @@ INDEX_HTML = """<!DOCTYPE html>
     font-size: 1rem; padding: 0 .25rem;
   }
   .del:hover { color: #f87171; }
+  .analyst { margin-top: 2rem; }
+  .analyst h2 { font-size: 1.1rem; margin-bottom: .75rem; }
+  #analyze-btn {
+    background: #0ea5e9; color: #fff; border: none; border-radius: 8px;
+    padding: .6rem 1.2rem; font-size: .9rem; cursor: pointer;
+  }
+  #analyze-btn:hover:not(:disabled) { background: #0284c7; }
+  #analyze-btn:disabled { opacity: .5; cursor: wait; }
+  #analysis-status { margin: .75rem 0; font-size: .85rem; color: #94a3b8; }
+  #report {
+    background: #1e293b; border-radius: 10px; padding: 1.5rem 2rem;
+    line-height: 1.6; overflow-x: auto;
+  }
+  #report h1, #report h2, #report h3 { color: #7dd3fc; margin-top: 1.2em; }
+  #report table { border-collapse: collapse; margin: .75rem 0; font-size: .85rem; }
+  #report th, #report td { border: 1px solid #334155; padding: .4rem .8rem; }
+  #report th { background: #334155; }
+  #report code { background: #0f172a; padding: .1rem .35rem; border-radius: 4px; }
+  #report pre { background: #0f172a; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+  #report pre code { background: none; padding: 0; }
+  #report ul, #report ol { padding-left: 1.4rem; }
+  #report blockquote { border-left: 3px solid #334155; margin: .75rem 0;
+                       padding-left: 1rem; color: #94a3b8; }
   table { width: 100%; border-collapse: collapse; background: #1e293b;
           border-radius: 10px; overflow: hidden; }
   th, td { padding: .7rem 1rem; text-align: left; }
@@ -104,6 +131,13 @@ INDEX_HTML = """<!DOCTYPE html>
     No instruments yet — add a symbol above to start watching.
   </div>
   <div id="status"></div>
+
+  <div class="analyst">
+    <h2>Equity Analyst Agent</h2>
+    <button id="analyze-btn" onclick="runAnalysis()">Run Momentum Analysis</button>
+    <div id="analysis-status"></div>
+    <div id="report"></div>
+  </div>
 <script>
 const REFRESH_MS = 2000;
 const fmtPrice = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -169,8 +203,55 @@ async function tick() {
     document.getElementById('status').textContent = 'Connection error — retrying…';
   }
 }
+// ---- Analyst agent -------------------------------------------------------
+let analysisTimer = null;
+
+async function runAnalysis() {
+  const btn = document.getElementById('analyze-btn');
+  btn.disabled = true;
+  document.getElementById('analysis-status').textContent = 'Collecting market data & generating report…';
+  document.getElementById('report').innerHTML = '';
+  try {
+    const res = await fetch('/api/analyze', {method: 'POST'});
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('analysis-status').textContent = data.detail || 'Analysis failed';
+      btn.disabled = false;
+      return;
+    }
+    if (analysisTimer) clearInterval(analysisTimer);
+    analysisTimer = setInterval(pollAnalysis, 3000);
+    pollAnalysis();
+  } catch (e) {
+    document.getElementById('analysis-status').textContent = 'Request failed — is the server running?';
+    btn.disabled = false;
+  }
+}
+
+async function pollAnalysis() {
+  try {
+    const res = await fetch('/api/analysis');
+    const data = await res.json();
+    const statusEl = document.getElementById('analysis-status');
+    const btn = document.getElementById('analyze-btn');
+    if (data.status === 'done') {
+      document.getElementById('report').innerHTML = data.html;
+      statusEl.textContent = 'Report ready.';
+      btn.disabled = false;
+      clearInterval(analysisTimer); analysisTimer = null;
+    } else if (data.status === 'error') {
+      statusEl.textContent = 'Error: ' + (data.error || 'unknown');
+      btn.disabled = false;
+      clearInterval(analysisTimer); analysisTimer = null;
+    } else {
+      statusEl.textContent = 'Generating report… (this can take 30–90s)';
+    }
+  } catch (e) { /* keep polling */ }
+}
+
 tick();
 setInterval(tick, REFRESH_MS);
+pollAnalysis();  // show last generated report (if any) on page load
 </script>
 </body>
 </html>
@@ -180,9 +261,43 @@ setInterval(tick, REFRESH_MS);
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
+WATCHLIST_FILE = "watchlist.json"
+
+
+def _load_watchlist() -> list[Instrument]:
+    """Load persisted watchlist instruments, if any."""
+    try:
+        data = json.loads(open(WATCHLIST_FILE, encoding="utf-8").read())
+        return [
+            Instrument(symbol=str(d["symbol"]).upper(), kind=d.get("kind", "EQ"))
+            for d in data
+            if d.get("symbol")
+        ]
+    except Exception:
+        return []
+
+
+def _save_watchlist(watch: MarketWatch) -> None:
+    """Persist current watchlist symbols to disk."""
+    try:
+        with watch._lock:
+            items = [
+                {"symbol": inst.symbol, "kind": inst.kind}
+                for inst in watch._instruments.values()
+            ]
+        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+            json.dump(items, f)
+    except Exception:
+        pass
+
+
 def create_app(watch: MarketWatch, settings: Settings) -> FastAPI:
     """Build the FastAPI application bound to a running MarketWatch."""
     app = FastAPI(title="Groww Market Watch", version="1.0.0")
+
+    # Analyst job state: {"status": idle|running|done|error, "html": str, "error": str}
+    analysis_state: dict = {"status": "idle", "html": "", "error": ""}
+    analysis_lock = threading.Lock()
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -210,6 +325,7 @@ def create_app(watch: MarketWatch, settings: Settings) -> FastAPI:
         inst = Instrument(symbol=symbol, kind=payload.kind)
         if not watch.add_instrument(inst):
             raise HTTPException(status_code=409, detail=f"{symbol} already tracked")
+        _save_watchlist(watch)
         return {"added": symbol, "kind": payload.kind}
 
     @app.delete("/api/instruments/{symbol}")
@@ -217,7 +333,42 @@ def create_app(watch: MarketWatch, settings: Settings) -> FastAPI:
         symbol = symbol.strip().upper()
         if not watch.remove_instrument(symbol):
             raise HTTPException(status_code=404, detail=f"{symbol} not tracked")
+        _save_watchlist(watch)
         return {"removed": symbol}
+
+    # ------------------------------------------------------------------
+    # Analyst agent endpoints
+    # ------------------------------------------------------------------
+    @app.post("/api/analyze", status_code=202)
+    async def start_analysis() -> dict:
+        with analysis_lock:
+            if analysis_state["status"] == "running":
+                raise HTTPException(status_code=409, detail="Analysis already running")
+            analysis_state.update({"status": "running", "html": "", "error": ""})
+
+        def _worker() -> None:
+            from agent import run_analysis
+
+            logger = logging.getLogger("market_watch")
+            try:
+                report_md = run_analysis(watch, settings, logger)
+                html = markdown.markdown(
+                    report_md, extensions=["tables", "fenced_code", "nl2br"]
+                )
+                with analysis_lock:
+                    analysis_state.update({"status": "done", "html": html})
+            except Exception as exc:
+                logger.exception("Analyst agent failed: %s", exc)
+                with analysis_lock:
+                    analysis_state.update({"status": "error", "error": str(exc)})
+
+        threading.Thread(target=_worker, name="analyst-agent", daemon=True).start()
+        return {"status": "running"}
+
+    @app.get("/api/analysis")
+    async def get_analysis() -> dict:
+        with analysis_lock:
+            return dict(analysis_state)
 
     return app
 
@@ -241,9 +392,9 @@ def run_web(
     else:
         groww = create_client(settings, logger)
 
-    # Web UI starts with an empty watchlist — instruments are added via the page.
-    instruments = []
-    logger.info("Web UI watchlist starts empty; add symbols from the page.")
+    # Web UI watchlist persists across restarts via watchlist.json
+    instruments = _load_watchlist()
+    logger.info("Web UI watchlist: %d persisted instrument(s).", len(instruments))
     watch = MarketWatch(
         groww=groww, instruments=instruments, settings=settings, logger=logger
     )

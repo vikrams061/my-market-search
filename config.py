@@ -95,6 +95,8 @@ class Settings:
     log_level: int = logging.INFO
     demo_mode: bool = False
     data_source: str = "groww"  # "groww" or "yahoo"
+    groq_api_key: Optional[str] = None
+    groq_model: str = "llama-3.3-70b-versatile"
     extra_symbols: tuple[str, ...] = field(default_factory=tuple)
     extra_indices: tuple[str, ...] = field(default_factory=tuple)
 
@@ -115,6 +117,8 @@ class Settings:
             log_level=getattr(logging, log_level_name, logging.INFO),
             demo_mode=_get_bool_env("DEMO_MODE", default=False),
             data_source=(_get_env("DATA_SOURCE", "groww") or "groww").strip().lower(),
+            groq_api_key=_get_env("GROQ_API_KEY"),
+            groq_model=_get_env("GROQ_MODEL", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile",
             extra_symbols=tuple(
                 s.strip().upper()
                 for s in (_get_env("EXTRA_SYMBOLS", "") or "").split(",")

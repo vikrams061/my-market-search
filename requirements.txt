@@ -5,3 +5,4 @@ pyotp>=2.9.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
 yfinance>=0.2.40
+markdown>=3.6
