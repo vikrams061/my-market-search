@@ -29,22 +29,22 @@ REQUEST_TIMEOUT = 120
 # ---------------------------------------------------------------------------
 # System prompt — the analyst persona/instructions
 # ---------------------------------------------------------------------------
-SYSTEM_PROMPT = """Act as a Senior SEBI-Registered Equity Analyst, Quantitative Momentum Trader, and Derivatives Specialist. Your goal is to scan liquid NSE F&O equities and identify TWO high-conviction momentum setups for a 5-to-10 trading session horizon:
+SYSTEM_PROMPT = """Act as a Senior SEBI-Registered Equity Analyst, Quantitative Intraday Momentum Trader, and Derivatives Specialist. Your goal is to scan liquid NSE F&O equities and identify TWO high-conviction INTRADAY momentum setups targeting the NEXT 15 MINUTES TO 2 HOURS of price movement:
 1. STOCK #1: Strongest Bullish Momentum (Long Candidate)
 2. STOCK #2: Strongest Bearish Momentum (Short / Bearish Strategy Candidate)
 
 CRITICAL INSTRUCTIONS:
-- You will be given a DATA PACKET containing real collected market data (quotes, technical indicators computed from daily candles, recent news headlines) for the user's watchlist, plus today's date. Base your analysis ONLY on this data plus well-established technical principles.
-- Do NOT hallucinate option prices, strike premiums, or exact intraday tick data (5m VPOC, 15m FVG) that is not in the data packet. If option chain data is absent, say so explicitly and give the strategy structure with strikes relative to CMP instead of fabricated premiums.
+- You will be given a DATA PACKET containing real collected market data (quotes, daily technicals, 15-minute intraday metrics: VWAP, 15m RSI, 1h momentum, recent news) for the user's watchlist, plus today's date. Base your analysis ONLY on this data plus well-established technical principles.
+- Do NOT hallucinate option prices, strike premiums, or exact tick data that is not in the data packet. If option chain data is absent, say so explicitly and give the strategy structure with strikes relative to CMP instead of fabricated premiums.
 - If a metric is unavailable (e.g., delivery %, option chain), state the data constraint explicitly rather than guessing.
 
 PHASES TO COVER IN YOUR REPORT:
 1. Market Catalyst & News Scan — classify sentiment +10 (highly bullish) to -10 (highly bearish) using the provided news; note missing data (FII/DII flows, brokerage notes) as constraints.
 2. Cash Market Structure & Volume — volume vs 20-day average, delivery % if available, CMP vs 20EMA/50SMA/200SMA.
-3. Multi-Timeframe Technicals — weekly/daily structure, RSI(14), MACD status, supports/resistances, 5-10 session targets.
-4. Pattern & Setup ID — flags, breakouts, engulfing candles etc. near key levels (infer from provided OHLC data where possible; state when unverifiable).
-5. Trade Execution Parameters — for BOTH stocks: T1 & T2 targets with timeframes, key S/R, strict stop-loss, risk:reward >= 1:2, directional probability %.
-6. Derivatives Strategy — current monthly expiry defined-risk strategy (Bull Call Spread / Bear Put Spread or equivalent), strike selection logic vs CMP, max risk/reward structure. If no option chain data, give strikes relative to CMP and label premiums as "to be checked on NSE option chain" — do NOT invent premium numbers.
+3. Multi-Timeframe Technicals — intraday (15m VWAP, 15m RSI, 1h momentum) as PRIMARY trigger, daily structure (RSI14, MACD, EMAs) as trend filter, supports/resistances, expected duration 15 min – 2 hours.
+4. Pattern & Setup ID — intraday flags, VWAP bounces/rejections, opening-range breaks, near key levels (infer from provided OHLC data where possible; state when unverifiable).
+5. Trade Execution Parameters — INTRADAY scalps for BOTH stocks: T1 & T2 targets achievable within 15–120 minutes, tight intraday stop-loss, risk:reward >= 1:2, directional probability %.
+6. Derivatives Strategy — current weekly/monthly expiry defined-risk intraday strategy (Bull Call Spread / Bear Put Spread or equivalent), strike selection logic vs CMP and VWAP, max risk/reward structure. If no option chain data, give strikes relative to CMP and label premiums as "to be checked on NSE option chain" — do NOT invent premium numbers.
 7. Executive Summary — end with a markdown comparison table of both picks covering: ticker, CMP, catalyst, pattern, T1/T2, stop-loss, volume/delivery, option strategy, premium structure.
 
 FORMAT: GitHub-flavored markdown with clear section headers. Be concise but complete — this renders in a web dashboard."""
@@ -192,6 +192,11 @@ def collect_market_data(watch: MarketWatch, logger: logging.Logger) -> dict:
                     for idx, row in hist.tail(10).iterrows()
                 ]
 
+            try:
+                entry["intraday"] = _intraday_metrics(tk)
+            except Exception:
+                entry["intraday"] = {}
+
             # news headlines
             try:
                 news = tk.news or []
@@ -254,6 +259,150 @@ def _call_groq(prompt: str, api_key: str, model: str, logger: logging.Logger) ->
 
 
 # ---------------------------------------------------------------------------
+# Trend bias & confidence (shared by scanner picks and quick checks)
+# ---------------------------------------------------------------------------
+def trend_bias(score: Optional[float]) -> str:
+    """Classify momentum score into a trend bias label."""
+    if score is None:
+        return "UNKNOWN"
+    if score >= 15:
+        return "BULLISH"
+    if score <= -15:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def confidence_pct(entry: dict) -> int:
+    """Estimate pick confidence (0-100) from signal agreement.
+
+    Counts how many independent signals (trend vs EMAs/200SMA, MACD, RSI
+    band, volume confirmation, day move, news sentiment) agree with the
+    momentum direction, then blends with the magnitude of the score.
+    """
+    score = entry.get("momentum_score")
+    if score is None:
+        return 0
+    direction = 1 if score > 0 else -1
+
+    tech = entry.get("technicals") or {}
+    q = entry.get("quote") or {}
+    cmp_price = tech.get("cmp") or q.get("ltp")
+
+    agree = 0
+    total = 0
+
+    def vote(bullish: bool, weight: int = 1) -> None:
+        nonlocal agree, total
+        total += weight
+        if bullish == (direction > 0):
+            agree += weight
+
+    if cmp_price and tech.get("ema_20"):
+        vote(cmp_price > tech["ema_20"])
+    if cmp_price and tech.get("ema_50"):
+        vote(cmp_price > tech["ema_50"])
+    if cmp_price and tech.get("sma_200"):
+        vote(cmp_price > tech["sma_200"])
+
+    hist = (tech.get("macd") or {}).get("histogram")
+    if hist is not None:
+        vote(hist > 0)
+
+    rsi = tech.get("rsi_14")
+    if rsi is not None:
+        # RSI > 50 leans bullish; extremes count as weaker conviction
+        if rsi > 80 or rsi < 20:
+            vote(direction > 0)  # extreme momentum in pick direction counts once
+        else:
+            vote(rsi > 50)
+
+    vol_ratio = tech.get("volume_vs_20d_avg")
+    chg = q.get("change_pct")
+    if vol_ratio and vol_ratio > 1.2 and chg is not None:
+        vote(chg > 0)
+
+    sent, _ = _news_sentiment(entry.get("news") or [])
+    if sent != 0:
+        vote(sent > 0)
+
+    # intraday agreement (15m VWAP + 1h momentum)
+    intra = entry.get("intraday") or {}
+    vs_vwap = intra.get("vs_vwap_pct")
+    if vs_vwap is not None:
+        vote(vs_vwap > 0)
+    mom_1h = intra.get("mom_1h_pct")
+    if mom_1h is not None and abs(mom_1h) > 0.1:
+        vote(mom_1h > 0)
+
+    agreement = agree / total if total else 0.5
+    # blend: magnitude contributes up to ~60 pts, agreement up to ~40
+    magnitude = min(abs(score) / 100.0, 1.0) * 60
+    return int(round(10 + magnitude + agreement * 40))
+
+
+def analyze_symbol(symbol: str, kind: str, logger: logging.Logger) -> dict:
+    """Quick trend/momentum check for ANY stock or index symbol."""
+    import yfinance as yf
+
+    from config import Instrument
+
+    inst = Instrument(symbol=symbol.upper(), kind=kind.upper())
+    idx_map = {
+        "NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^CNXFIN",
+        "MIDCPNIFT": "^CNXMID", "NIFTYNXT50": "^NIFTYNXT50",
+    }
+    alias = {"HDFC": "HDFCBANK.NS"}.get(inst.symbol)
+    ys = alias or (
+        idx_map.get(inst.symbol, f"^{inst.symbol}")
+        if inst.kind == "INDEX" else f"{inst.symbol}.NS"
+    )
+
+    tk = yf.Ticker(ys)
+    hist = tk.history(period="6mo", interval="1d", auto_adjust=False)
+    if hist is None or hist.empty or len(hist) < 30:
+        raise RuntimeError(f"No price data found for {symbol} ({ys})")
+
+    closes = [float(c) for c in hist["Close"].dropna()]
+    volumes = [float(v) for v in hist["Volume"].dropna()] if "Volume" in hist.columns else []
+    entry = {
+        "symbol": inst.symbol,
+        "kind": inst.kind,
+        "quote": {"ltp": closes[-1], "change_pct": None},
+        "technicals": {
+            "cmp": closes[-1],
+            "rsi_14": _rsi(closes),
+            "ema_20": _ema(closes, 20),
+            "ema_50": _ema(closes, 50),
+            "sma_200": _sma(closes, 200),
+            "macd": _macd(closes),
+            "avg_volume_20d": round(sum(volumes[-20:]) / min(20, len(volumes))) if volumes else None,
+            "latest_volume": int(volumes[-1]) if volumes else None,
+            "volume_vs_20d_avg": (
+                round(volumes[-1] / (sum(volumes[-20:]) / min(20, len(volumes))), 2)
+                if volumes and len(volumes) >= 20 else None
+            ),
+        },
+        "news": [],
+    }
+    try:
+        fi = tk.fast_info
+        if getattr(fi, "previous_close", None):
+            entry["quote"]["change_pct"] = round((closes[-1] / float(fi.previous_close) - 1) * 100, 2)
+    except Exception:
+        pass
+
+    try:
+        entry["intraday"] = _intraday_metrics(tk)
+    except Exception:
+        entry["intraday"] = {}
+
+    entry["momentum_score"] = _momentum_score(entry)
+    entry["trend_bias"] = trend_bias(entry["momentum_score"])
+    entry["confidence"] = confidence_pct(entry)
+    return entry
+
+
+# ---------------------------------------------------------------------------
 # Local deterministic analyst (no LLM required)
 # ---------------------------------------------------------------------------
 _BULL_WORDS = {
@@ -284,10 +433,46 @@ def _news_sentiment(news: list[dict]) -> tuple[float, list[str]]:
     return max(-1.0, min(1.0, score / max(1, len(news)))), hits[:5]
 
 
+def _intraday_metrics(tk: Any) -> dict:
+    """Fetch 15-minute bars and derive intraday trend metrics."""
+    try:
+        df = tk.history(period="5d", interval="15m", auto_adjust=False)
+        if df is None or df.empty or len(df) < 20:
+            return {}
+        closes = df["Close"].dropna()
+        if len(closes) < 15:
+            return {}
+        last = float(closes.iloc[-1])
+
+        # session VWAP approximation
+        if {"High", "Low", "Volume"}.issubset(df.columns):
+            typical = (df["High"] + df["Low"] + df["Close"]) / 3
+            vol = df["Volume"].fillna(0)
+            vwap = float((typical * vol).sum() / vol.sum()) if vol.sum() else None
+        else:
+            vwap = None
+
+        closes_list = [float(c) for c in closes]
+        mom_1h = None
+        if len(closes_list) >= 5:
+            mom_1h = round((last / closes_list[-5] - 1) * 100, 3)
+
+        return {
+            "rsi_15m": _rsi(closes_list),
+            "vwap": round(vwap, 2) if vwap else None,
+            "vs_vwap_pct": round((last / vwap - 1) * 100, 3) if vwap else None,
+            "mom_1h_pct": mom_1h,
+            "price": round(last, 2),
+        }
+    except Exception:
+        return {}
+
+
 def _momentum_score(entry: dict) -> float:
-    """Composite momentum score in roughly [-100, +100]."""
+    """Composite momentum score in roughly [-100, +100] (incl. intraday)."""
     tech = entry.get("technicals") or {}
     q = entry.get("quote") or {}
+    intra = entry.get("intraday") or {}
     score = 0.0
 
     cmp_price = tech.get("cmp") or q.get("ltp")
@@ -323,6 +508,20 @@ def _momentum_score(entry: dict) -> float:
 
     sent, _ = _news_sentiment(entry.get("news") or [])
     score += sent * 20
+
+    # --- intraday (15m) momentum component -------------------------------
+    vs_vwap = intra.get("vs_vwap_pct")
+    if vs_vwap is not None:
+        score += 10 if vs_vwap > 0 else -10
+    mom_1h = intra.get("mom_1h_pct")
+    if mom_1h is not None:
+        score += 10 if mom_1h > 0.1 else (-10 if mom_1h < -0.1 else 0)
+    rsi_15m = intra.get("rsi_15m")
+    if rsi_15m is not None:
+        if 55 <= rsi_15m <= 75:
+            score += 8
+        elif rsi_15m > 80 or rsi_15m < 25:
+            score -= 6
 
     return round(score, 1)
 
@@ -364,20 +563,20 @@ def _stock_section(entry: dict, score: float, bullish: bool, expiry: date) -> st
     # derived trade params (rule-based)
     if cmp_price:
         if bullish:
-            t1 = round(cmp_price * 1.04, 2)
-            t2 = round(cmp_price * 1.09, 2)
-            sl = round(cmp_price * 0.98, 2)
+            t1 = round(cmp_price * 1.008, 2)
+            t2 = round(cmp_price * 1.015, 2)
+            sl = round(cmp_price * 0.995, 2)
             strategy = (
                 f"Bull Call Spread — buy {_fmt_strike(cmp_price, 'ce')} CE, "
-                f"sell 1 strike OTM; expiry {expiry.isoformat()}"
+                f"sell 1 strike OTM; expiry {expiry.isoformat()} (intraday hold)"
             )
         else:
-            t1 = round(cmp_price * 0.96, 2)
-            t2 = round(cmp_price * 0.91, 2)
-            sl = round(cmp_price * 1.02, 2)
+            t1 = round(cmp_price * 0.992, 2)
+            t2 = round(cmp_price * 0.985, 2)
+            sl = round(cmp_price * 1.005, 2)
             strategy = (
                 f"Bear Put Spread — buy {_fmt_strike(cmp_price, 'pe')} PE, "
-                f"sell 1 strike OTM; expiry {expiry.isoformat()}"
+                f"sell 1 strike OTM; expiry {expiry.isoformat()} (intraday hold)"
             )
         rr = abs((t1 - cmp_price) / (cmp_price - sl)) if cmp_price != sl else 0
     else:
@@ -386,10 +585,12 @@ def _stock_section(entry: dict, score: float, bullish: bool, expiry: date) -> st
 
     news_md = "\n".join(f"- {h}" for h in headlines) if headlines else "- No recent headlines retrieved"
     pattern = "Momentum continuation (rule-based inference from MAs/RSI/MACD)" if score != 0 else "Insufficient data"
+    bias = trend_bias(score)
+    conf = confidence_pct(entry)
 
     return f"""### {sym} — {direction}
 
-**Momentum Score:** {score}/100 | **Sentiment:** {sentiment_label} ({sent:+.2f})
+**Trend Bias:** {bias} | **Confidence:** {conf}% | **Momentum Score:** {score}/100 | **Sentiment:** {sentiment_label} ({sent:+.2f})
 
 - **CMP:** {_fmt_price(cmp_price)} | **Day Chg:** {q.get('change_pct') if q.get('change_pct') is not None else 'N/A'}%
 - **RSI(14):** {round(rsi, 1) if rsi is not None else 'N/A'} | **MACD hist:** {macd.get('histogram') if macd.get('histogram') is not None else 'N/A'}
@@ -401,7 +602,7 @@ def _stock_section(entry: dict, score: float, bullish: bool, expiry: date) -> st
 {news_md}
 
 **Trade parameters (rule-based):**
-- T1: {_fmt_price(t1)} (2–4 sessions) | T2: {_fmt_price(t2)} (5–10 sessions)
+- T1: {_fmt_price(t1)} (15–30 min) | T2: {_fmt_price(t2)} (1–2 hrs)
 - Stop-loss: {_fmt_price(sl)} | Indicative R:R ≈ {rr:.1f}:1 | Probability: ~{min(70, max(35, int(50 + abs(score))))}%
 - **Option strategy:** {strategy} — *net premium & exact strikes must be verified on the NSE option chain; not available via current data source.*
 """

@@ -15,3 +15,5 @@ market_watch.log
 watchlist.json
 picks.json
 active_picks.json
+pick_history.json
+momentum_picks.json

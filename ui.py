@@ -108,6 +108,25 @@ INDEX_HTML = """<!DOCTYPE html>
   .scan-btn { background: #0ea5e9; color:#fff; border:none; border-radius:8px;
               padding:.5rem 1rem; font-size:.85rem; cursor:pointer; margin-left:.75rem; }
   .scan-btn:disabled { opacity:.5; cursor:wait; }
+  .perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; margin: .75rem 0; }
+  .perf-stat { background: #1e293b; border-radius: 10px; padding: .8rem 1rem; }
+  .perf-stat .label { font-size: .72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .04em; }
+  .perf-stat .value { font-size: 1.3rem; font-weight: 700; margin-top: .2rem; }
+  #perf-table { width: 100%; border-collapse: collapse; background: #1e293b;
+               border-radius: 10px; overflow: hidden; font-size: .82rem; }
+  #perf-table th, #perf-table td { padding: .45rem .8rem; text-align: left; }
+  #perf-table th { background: #334155; font-size: .72rem; text-transform: uppercase; }
+  #perf-table tr + tr td { border-top: 1px solid #334155; }
+  .today-tag { font-size: .65rem; background: #0ea5e9; color: #fff;
+               border-radius: 4px; padding: .1rem .35rem; margin-left: .35rem; }
+  .tabs { display: flex; gap: .4rem; margin: 1.25rem 0 1.5rem; flex-wrap: wrap; }
+  .tab-btn {
+    background: #1e293b; color: #94a3b8; border: 1px solid #334155;
+    border-radius: 8px; padding: .5rem 1rem; font-size: .85rem; cursor: pointer;
+  }
+  .tab-btn.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
   table { width: 100%; border-collapse: collapse; background: #1e293b;
           border-radius: 10px; overflow: hidden; }
   th, td { padding: .7rem 1rem; text-align: left; }
@@ -128,6 +147,35 @@ INDEX_HTML = """<!DOCTYPE html>
 <body>
   <h1><span class="pulse"></span>Groww Market Watch</h1>
   <div class="sub" id="meta">Loading…</div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('dashboard', this)">Dashboard</button>
+    <button class="tab-btn" onclick="switchTab('analyst', this)">Analyst</button>
+    <button class="tab-btn" onclick="switchTab('nifty', this)">NIFTY 50</button>
+    <button class="tab-btn" onclick="switchTab('active', this)">Active Stocks</button>
+    <button class="tab-btn" onclick="switchTab('check', this)">Trend Check</button>
+    <button class="tab-btn" onclick="switchTab('radar', this)">Momentum Radar</button>
+    <button class="tab-btn" onclick="switchTab('options', this)">Options Desk</button>
+    <button class="tab-btn" onclick="switchTab('orb', this)">ORB / VWAP</button>
+  </div>
+
+  <div class="tab-pane active" id="pane-dashboard">
+  <div class="analyst">
+    <h2>Agent Performance
+      <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
+    </h2>
+    <div id="agent-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;margin:.75rem 0"></div>
+    <div class="perf-grid" id="perf-stats"></div>
+    <table id="perf-table">
+      <thead><tr>
+        <th>Date</th><th>Agent</th><th>Side</th><th>Symbol</th>
+        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
+      </tr></thead>
+      <tbody id="perf-rows"></tbody>
+    </table>
+    <div id="optimizer" style="margin-top:.75rem"></div>
+  </div>
+
   <div class="controls">
     <input id="sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
     <select id="kind">
@@ -148,14 +196,18 @@ INDEX_HTML = """<!DOCTYPE html>
     No instruments yet — add a symbol above to start watching.
   </div>
   <div id="status"></div>
+  </div><!-- /pane-dashboard -->
 
+  <div class="tab-pane" id="pane-analyst">
   <div class="analyst">
     <h2>Equity Analyst Agent</h2>
     <button id="analyze-btn" onclick="runAnalysis()">Run Momentum Analysis</button>
     <div id="analysis-status"></div>
     <div id="report"></div>
   </div>
+  </div><!-- /pane-analyst -->
 
+  <div class="tab-pane" id="pane-nifty">
   <div class="analyst">
     <h2>Today's NIFTY 50 Picks
       <button class="scan-btn" id="scan-btn" onclick="startScan()">Rescan</button>
@@ -167,7 +219,9 @@ INDEX_HTML = """<!DOCTYPE html>
       <div class="mini-list"><h4>Top 5 Bearish</h4><div id="bottom5"></div></div>
     </div>
   </div>
+  </div><!-- /pane-nifty -->
 
+  <div class="tab-pane" id="pane-active">
   <div class="analyst">
     <h2>Today's Active Stock Picks
       <button class="scan-btn" id="active-scan-btn" onclick="startActiveScan()">Rescan</button>
@@ -175,7 +229,75 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="active-scan-status" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
     <div class="picks" id="active-cards"></div>
   </div>
+  </div><!-- /pane-active -->
+
+  <div class="tab-pane" id="pane-check">
+  <div class="analyst">
+    <h2>Trend &amp; Momentum Check</h2>
+    <div class="controls">
+      <input id="check-sym" placeholder="Any symbol (e.g. TATAMOTORS, NIFTY)" maxlength="30" />
+      <select id="check-kind">
+        <option value="EQ">Stock</option>
+        <option value="INDEX">Index</option>
+      </select>
+      <button onclick="checkSymbol()">Check</button>
+    </div>
+    <div id="check-result"></div>
+  </div>
+  </div><!-- /pane-check -->
+
+  <div class="tab-pane" id="pane-radar">
+  <div class="analyst">
+    <h2>Momentum Radar — All Caps
+      <button class="scan-btn" id="mom-scan-btn" onclick="startMomScan()">Rescan</button>
+    </h2>
+    <div id="mom-scan-status" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
+    <div class="lists">
+      <div class="mini-list"><h4>Top Bullish</h4><div id="mom-top"></div></div>
+      <div class="mini-list"><h4>Top Bearish</h4><div id="mom-bottom"></div></div>
+    </div>
+  </div>
+  </div><!-- /pane-radar -->
+
+  <div class="tab-pane" id="pane-options">
+  <div class="analyst">
+    <h2>Options Desk — Defined-Risk Spreads</h2>
+    <div class="controls">
+      <input id="opt-sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
+      <select id="opt-kind">
+        <option value="EQ">Stock</option>
+        <option value="INDEX">Index</option>
+      </select>
+      <button onclick="runOptions()">Analyze</button>
+    </div>
+    <div id="opt-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="opt-report"></div>
+  </div>
+  </div><!-- /pane-options -->
+
+  <div class="tab-pane" id="pane-orb">
+  <div class="analyst">
+    <h2>ORB / VWAP Momentum Desk</h2>
+    <div class="controls">
+      <input id="orb-sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
+      <select id="orb-kind">
+        <option value="EQ">Stock</option>
+        <option value="INDEX">Index</option>
+      </select>
+      <button onclick="runOrb()">Analyze</button>
+    </div>
+    <div id="orb-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="orb-report"></div>
+  </div>
+  </div><!-- /pane-orb -->
+
 <script>
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('pane-' + name).classList.add('active');
+  btn.classList.add('active');
+}
 const REFRESH_MS = 2000;
 const fmtPrice = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const fmtVol = v => {
@@ -297,7 +419,7 @@ function pickCard(title, clsName, p, note) {
   const mv = p.movement || 0;
   return `<div class="pick-card ${clsName}">
     <h3>${p.symbol}</h3>
-    <div class="score">Momentum ${p.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
+    <div class="score">${p.trend_bias || ''} · Confidence ${p.confidence != null ? p.confidence + '%' : '—'} · Momentum ${p.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
     <div class="ltp">${fmtInr(p.quote && p.quote.ltp)}</div>
     <div class="move ${cls(p.quote && p.quote.change_pct)}">${sgn(p.quote && p.quote.change_pct)}${p.quote && p.quote.change_pct != null ? p.quote.change_pct.toFixed(2) : '—'}% today</div>
     <div class="meta">Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'} 20d avg ·
@@ -359,7 +481,7 @@ function renderActivePicks(d) {
     const tg = pk.targets;
     return `<div class="pick-card ${clsName}">
       <h3>${pk.symbol}</h3>
-      <div class="score">Momentum ${pk.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
+      <div class="score">${pk.trend_bias || ''} · Confidence ${pk.confidence != null ? pk.confidence + '%' : '—'} · Momentum ${pk.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
       <div class="ltp">${fmtInr(pk.quote && pk.quote.ltp)}</div>
       <div class="move ${cls(pk.quote && pk.quote.change_pct)}">${sgn(pk.quote && pk.quote.change_pct)}${pk.quote && pk.quote.change_pct != null ? pk.quote.change_pct.toFixed(2) : '—'}% today</div>
       <div class="meta">Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'} 20d avg ·
@@ -395,6 +517,176 @@ async function startActiveScan() {
   activeScanStatus();
 }
 
+// ---- Trend & momentum quick check ----------------------------------------
+async function checkSymbol() {
+  const sym = document.getElementById('check-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('check-kind').value;
+  if (sym) showCheck(sym, kind);
+}
+
+async function showCheck(sym, kind) {
+  const out = document.getElementById('check-result');
+  out.innerHTML = '<div class="meta" style="color:#94a3b8">Analyzing…</div>';
+  try {
+    const res = await fetch(`/api/check?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
+    const d = await res.json();
+    if (!res.ok) { out.innerHTML = `<div class="meta" style="color:#f87171">${d.detail || 'Check failed'}</div>`; return; }
+    const t = d.technicals || {};
+    out.innerHTML = `<div class="pick-card" style="max-width:520px">
+      <h3>${d.symbol} <span class="badge">${d.kind}</span></h3>
+      <div class="score">${d.trend_bias} · Confidence ${d.confidence}% · Momentum ${d.momentum_score}/100</div>
+      <div class="ltp">${fmtInr(d.quote && d.quote.ltp)}</div>
+      <div class="meta">Day ${d.quote && d.quote.change_pct != null ? sgn(d.quote.change_pct) + d.quote.change_pct.toFixed(2) + '%' : '—'} ·
+        RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(1) : '—'} ·
+        Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'}<br>
+        EMA20 ${fmtInr(t.ema_20)} · EMA50 ${fmtInr(t.ema_50)} · 200SMA ${fmtInr(t.sma_200)}</div>
+    </div>`;
+  } catch (e) {
+    out.innerHTML = '<div class="meta" style="color:#f87171">Request failed</div>';
+  }
+}
+
+// ---- Momentum radar (broad multi-cap scan) --------------------------------
+function momRow(e) {
+  const biasCls = e.bias === 'BULLISH' ? 'up' : e.bias === 'BEARISH' ? 'down' : 'flat';
+  return `<div style="cursor:pointer" title="Click for detail" onclick="showCheck('${e.symbol}','EQ')"><span>${e.symbol}</span>
+    <span><span class="${biasCls}">${e.bias || ''}</span>
+    ${e.confidence != null ? ' · ' + e.confidence + '%' : ''}
+    · ${e.score} · ${fmtInr(e.cmp)}</span></div>`;
+}
+
+async function refreshMomPicks() {
+  try {
+    const res = await fetch('/api/momentum/picks');
+    const d = await res.json();
+    if (d.status !== 'ready' || !d.picks) {
+      document.getElementById('mom-top').innerHTML = '<div style="color:#64748b">Scanning…</div>';
+      return;
+    }
+    document.getElementById('mom-top').innerHTML =
+      (d.picks.top5 || []).map(momRow).join('');
+    document.getElementById('mom-bottom').innerHTML =
+      (d.picks.bottom5 || []).map(momRow).join('');
+  } catch (e) {}
+}
+
+async function momScanStatus() {
+  try {
+    const res = await fetch('/api/momentum/scan/status');
+    const d = await res.json();
+    document.getElementById('mom-scan-status').textContent =
+      d.status === 'running' ? `Scanning all caps… ${d.progress || ''}` :
+      d.status === 'done' ? `Last scan: ${d.progress || ''} symbols` : '';
+    document.getElementById('mom-scan-btn').disabled = d.status === 'running';
+  } catch (e) {}
+}
+
+async function startMomScan() {
+  document.getElementById('mom-scan-btn').disabled = true;
+  await fetch('/api/momentum/scan', {method: 'POST'});
+  setInterval(momScanStatus, 3000);
+  momScanStatus();
+}
+
+// ---- Options desk ---------------------------------------------------------
+async function runOptions() {
+  const sym = document.getElementById('opt-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('opt-kind').value;
+  const statusEl = document.getElementById('opt-status');
+  const out = document.getElementById('opt-report');
+  if (!sym) return;
+  statusEl.textContent = 'Analyzing…';
+  out.innerHTML = '';
+  try {
+    const res = await fetch(`/api/options/analyze?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Analysis failed'; return; }
+    statusEl.textContent = '';
+    out.innerHTML = d.html;
+  } catch (e) {
+    statusEl.textContent = 'Request failed';
+  }
+}
+
+// ---- ORB / VWAP desk ------------------------------------------------------
+async function runOrb() {
+  const sym = document.getElementById('orb-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('orb-kind').value;
+  const statusEl = document.getElementById('orb-status');
+  const out = document.getElementById('orb-report');
+  if (!sym) return;
+  statusEl.textContent = 'Analyzing…';
+  out.innerHTML = '';
+  try {
+    const res = await fetch(`/api/orb/analyze?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Analysis failed'; return; }
+    statusEl.textContent = '';
+    out.innerHTML = d.html;
+  } catch (e) {
+    statusEl.textContent = 'Request failed';
+  }
+}
+
+// ---- Agent performance ----------------------------------------------------
+async function refreshPerf(force) {
+  try {
+    const res = await fetch('/api/performance' + (force ? '?refresh=1' : ''));
+    const d = await res.json();
+    const stats = d.stats || {};
+    const cell = (label, val, color) =>
+      `<div class="perf-stat"><div class="label">${label}</div>
+       <div class="value" style="color:${color || '#e2e8f0'}">${val}</div></div>`;
+    const o = stats.overall || {};
+    document.getElementById('perf-stats').innerHTML =
+      cell('Total Picks', o.picks ?? '—') +
+      cell('Win Rate', o.win_rate != null ? o.win_rate + '%' : '—', o.win_rate >= 50 ? '#4ade80' : '#f87171') +
+      cell('Avg Return', o.avg_return != null ? sgn(o.avg_return) + o.avg_return + '%' : '—', cls(o.avg_return)) +
+      cell('Best', o.best != null ? '+' + o.best + '%' : '—', '#4ade80') +
+      cell('Worst', o.worst != null ? o.worst + '%' : '—', '#f87171');
+
+    // Per-agent cards with description + track record
+    const AGENTS = [
+      {key: 'quotes',  name: 'Market Watch',      desc: 'Real-time LTP/quote feed for your watchlist (Yahoo delayed / Groww live).', src: null},
+      {key: 'analyst', name: 'Equity Analyst',    desc: '7-phase momentum report: news scan, technicals, targets, option strategy.', src: null},
+      {key: 'nifty',   name: 'NIFTY 50 Scanner',  desc: 'Daily momentum scan of all 50 NIFTY constituents; picks top bullish/bearish.', src: 'nifty'},
+      {key: 'active',  name: 'Active Stocks',     desc: 'Momentum scan of ~100 liquid NSE large/mid caps.', src: 'active'},
+      {key: 'momentum',name: 'Momentum Radar',    desc: 'Broad ~180-symbol multi-cap scan (small/mid/large) with trend bias + confidence.', src: 'momentum'},
+    ];
+    const bySrc = stats.by_source || {};
+    document.getElementById('agent-cards').innerHTML = AGENTS.map(a => {
+      const st = a.src ? (bySrc[a.src] || {}) : {};
+      const perf = a.src
+        ? (st.scored
+            ? `Picks ${st.picks} · Win ${st.win_rate}% · Avg ${sgn(st.avg_return)}${st.avg_return}%`
+            : 'No scored picks yet')
+        : 'Data feed — no picks';
+      const color = st.avg_return == null ? '#94a3b8' : cls(st.avg_return);
+      return `<div class="pick-card"><h3 style="font-size:.95rem">${a.name}</h3>
+        <div class="score" style="color:${color};font-weight:600">${perf}</div>
+        <div class="meta" style="margin-top:.3rem">${a.desc}</div></div>`;
+    }).join('');
+    const rows = document.getElementById('perf-rows');
+    rows.innerHTML = (d.rows || []).map(r => `<tr>
+      <td>${r.date}${r.is_today ? '<span class="today-tag">today</span>' : ''}</td>
+      <td>${r.source}</td>
+      <td>${r.side}</td>
+      <td>${r.symbol}</td>
+      <td class="num">${r.entry != null ? fmtInr(r.entry) : '—'}</td>
+      <td class="num">${r.current != null ? fmtInr(r.current) : '—'}</td>
+      <td class="num ${cls(r.return_pct)}">${r.return_pct != null ? sgn(r.return_pct) + r.return_pct + '%' : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:#64748b">No picks recorded yet</td></tr>';
+    const opt = d.optimizer || {};
+    const findings = opt.findings || [];
+    document.getElementById('optimizer').innerHTML = findings.length
+      ? `<div class="mini-list" style="border-left:3px solid #f59e0b">
+           <h4>Optimizer Suggestions</h4>
+           ${findings.map(f => `<div style="display:block;padding:.3rem 0">• ${f}</div>`).join('')}
+         </div>`
+      : '';
+  } catch (e) {}
+}
+
 tick();
 setInterval(tick, REFRESH_MS);
 pollAnalysis();  // show last generated report (if any) on page load
@@ -404,6 +696,11 @@ scanStatus();
 refreshActivePicks();
 setInterval(refreshActivePicks, 15000);
 activeScanStatus();
+refreshPerf();
+setInterval(refreshPerf, 60000);
+refreshMomPicks();
+setInterval(refreshMomPicks, 20000);
+momScanStatus();
 </script>
 </body>
 </html>
@@ -443,7 +740,14 @@ def _save_watchlist(watch: MarketWatch) -> None:
         pass
 
 
-def create_app(watch: MarketWatch, settings: Settings, scanner=None, active_scanner=None) -> FastAPI:
+def create_app(
+    watch: MarketWatch,
+    settings: Settings,
+    scanner=None,
+    active_scanner=None,
+    momentum_scanner=None,
+    performance=None,
+) -> FastAPI:
     """Build the FastAPI application bound to a running MarketWatch."""
     app = FastAPI(title="Groww Market Watch", version="1.0.0")
 
@@ -560,6 +864,77 @@ def create_app(watch: MarketWatch, settings: Settings, scanner=None, active_scan
     async def get_active_picks() -> dict:
         return active_scanner.today_picks() if active_scanner else {"status": "unavailable"}
 
+    # ------------------------------------------------------------------
+    # Agent performance endpoint
+    # ------------------------------------------------------------------
+    @app.get("/api/performance")
+    async def get_performance(refresh: bool = False) -> dict:
+        if performance is None:
+            return {"stats": {}, "rows": [], "optimizer": {"findings": []}}
+        data = performance.report(force=refresh)
+        data["optimizer"] = performance.suggestions()
+        return data
+
+    # ------------------------------------------------------------------
+    # Momentum radar (broad multi-cap) endpoints
+    # ------------------------------------------------------------------
+    @app.post("/api/momentum/scan", status_code=202)
+    async def start_momentum_scan() -> dict:
+        if momentum_scanner is None:
+            raise HTTPException(status_code=503, detail="Scanner not available")
+        if not momentum_scanner.start_scan():
+            raise HTTPException(status_code=409, detail="Scan already running")
+        return {"status": "running"}
+
+    @app.get("/api/momentum/scan/status")
+    async def momentum_scan_status() -> dict:
+        return momentum_scanner.status() if momentum_scanner else {"status": "unavailable"}
+
+    @app.get("/api/momentum/picks")
+    async def get_momentum_picks() -> dict:
+        return momentum_scanner.today_picks() if momentum_scanner else {"status": "unavailable"}
+
+    # ------------------------------------------------------------------
+    # Trend & momentum quick check (any symbol/index)
+    # ------------------------------------------------------------------
+    @app.get("/api/check")
+    async def quick_check(symbol: str, kind: str = "EQ") -> dict:
+        from agent import analyze_symbol
+
+        logger = logging.getLogger("market_watch")
+        try:
+            return analyze_symbol(symbol, kind, logger)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------------
+    # Options desk agent
+    # ------------------------------------------------------------------
+    @app.get("/api/options/analyze")
+    async def options_analyze(symbol: str, kind: str = "EQ") -> dict:
+        from options_agent import analyze_options
+
+        logger = logging.getLogger("market_watch")
+        try:
+            md = analyze_options(symbol, kind, logger)
+            return {"html": markdown.markdown(md, extensions=["tables", "fenced_code", "nl2br"])}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------------
+    # ORB / VWAP desk agent
+    # ------------------------------------------------------------------
+    @app.get("/api/orb/analyze")
+    async def orb_analyze(symbol: str, kind: str = "EQ") -> dict:
+        from orb_agent import analyze_orb
+
+        logger = logging.getLogger("market_watch")
+        try:
+            md = analyze_orb(symbol, kind, logger)
+            return {"html": markdown.markdown(md, extensions=["tables", "fenced_code", "nl2br"])}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     return app
 
 
@@ -609,19 +984,30 @@ def run_web(
     # NIFTY 50 + active-stocks scanners — auto-scan on startup if needed
     scanner = None
     active_scanner = None
+    momentum_scanner = None
     if settings.data_source in {"yahoo", "demo"}:
-        from scanner import ACTIVE_STOCKS, NiftyScanner
+        from performance import PerformanceAgent
+        from scanner import ACTIVE_STOCKS, BROAD_STOCKS, NiftyScanner
 
-        scanner = NiftyScanner(logger)
+        scanner = NiftyScanner(logger, source="nifty")
         scanner.ensure_today()
         active_scanner = NiftyScanner(
-            logger, symbols=ACTIVE_STOCKS, picks_file="active_picks.json"
+            logger, symbols=ACTIVE_STOCKS, picks_file="active_picks.json", source="active"
         )
         active_scanner.ensure_today()
+        momentum_scanner = NiftyScanner(
+            logger, symbols=BROAD_STOCKS, picks_file="momentum_picks.json", source="momentum"
+        )
+        momentum_scanner.ensure_today()
+        performance = PerformanceAgent(logger)
     else:
         logger.info("Scanners disabled for data_source=%s.", settings.data_source)
+        performance = None
 
-    app = create_app(watch, settings, scanner=scanner, active_scanner=active_scanner)
+    app = create_app(
+        watch, settings, scanner=scanner, active_scanner=active_scanner,
+        momentum_scanner=momentum_scanner, performance=performance,
+    )
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     except KeyboardInterrupt:

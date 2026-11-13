@@ -1,0 +1,5 @@
+{
+  "min_volume_ratio": 1.0,
+  "min_confidence": 50,
+  "min_abs_score": 20
+}

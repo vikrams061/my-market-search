@@ -16,10 +16,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, Optional
 
-from agent import _ema, _macd, _momentum_score, _news_sentiment, _rsi, _sma
+from agent import (
+    _ema, _intraday_metrics, _macd, _momentum_score, _news_sentiment, _rsi, _sma,
+    confidence_pct, trend_bias,
+)
 
 PICKS_FILE = "picks.json"
+PICK_HISTORY_FILE = "pick_history.json"
+TUNING_FILE = "agent_tuning.json"
 SCAN_WORKERS = 10
+
+
+def _load_tuning() -> dict:
+    """Load performance-agent tuning params, if present."""
+    try:
+        return json.loads(open(TUNING_FILE, encoding="utf-8").read())
+    except Exception:
+        return {}
 
 # NIFTY 50 constituents (NSE tickers)
 NIFTY50 = [
@@ -50,6 +63,42 @@ ACTIVE_STOCKS = NIFTY50 + [
 ]
 ACTIVE_STOCKS = list(dict.fromkeys(ACTIVE_STOCKS))
 
+# Broad multi-cap universe for the momentum radar (large + mid + small caps)
+BROAD_STOCKS = ACTIVE_STOCKS + [
+    # PSU banks & financials
+    "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "INDIANB", "BOB", "SYNDIBANK",
+    "UJJIVANSFB", "RBLBANK", "IDFCFIRSTB", "M&MFIN", "CHOLAFIN", "MUTHOOTFIN",
+    "MANAPPURAM", "PFC", "RECLTD", "IRFC", "HUDCO", "SBICARD", "HDFCAMC",
+    # Industrials & capital goods
+    "BHEL", "THERMAX", "CUMMINSIND", "BEML", "BDL", "RVNL", "IRCTC", "HAL",
+    "BEL", "MAZDOCK", "NBCC", "CONCOR", "GMRAIRPORT", "TITAGARH", "ASHOKLEY",
+    "BALKRISIND", "MOTHERSON", "BOSCHLTD", "SIEMENS", "ABB", "CGPOWER",
+    "HONAUT", "TRENT", "PAGEIND", "RELAXO", "BATAINDIA", "KPRMILL",
+    # Consumption & retail
+    "JUBLFOOD", "WESTLIFE", "VBL", "TRENT", "DMART", "PIDILITIND", "MRF",
+    "BATAINDIA", "RELAXO", "PAGEIND", "KPRMILL", "TATACONSUM", "BRITANNIA",
+    "HINDUNILVR", "ITC", "NESTLEIND", "COLPAL", "MARICO", "DABUR",
+    "GODREJCP", "EMAMILTD", "AWL", "PCJEWELLER", "VAIBHAVGLOBAL",
+    # IT & tech midcaps
+    "TATAELXSI", "KPITTECH", "MPHASIS", "HAPPSTMNDS", "COFORGE", "PERSISTENT",
+    "LTIM", "OFSS", "ZENSAR", "COCHINSHIP", "GESHIP", "MAZAGON", "BEL",
+    "ASTRAMICRO", "TANLA", "INTELLECT", "YATHARTH", "MTARTECH", "AXITA",
+    # Energy & commodities
+    "SUZLON", "WAAREEENER", "ADANIGREEN", "ADANIPOWER", "TORNTPHARM",
+    "DEEPAKNITR", "KALYANKJIL", "JINDALSAW", "WELCORP", "UJJIVANSFB",
+    "IDEA", "YESBANK", "RCOM", "TATASTEEL", "JSWSTEEL", "HINDALCO",
+    "VEDL", "COALINDIA", "NMDC", "SAIL", "HINDZINC", "MOIL",
+    # Pharma & healthcare
+    "LUPIN", "BIOCON", "MAXHEALTH", "FORTIS", "LALPATHLAB", "METROPOLIS",
+    "THYROCARE", "KRISHANA", "SMSPHARMA", "APEX", "AAREYDRUG",
+    # Realty & others
+    "DLF", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "MGL",
+    "BRIGADE", "SOBHA", "NIGHTINTERM", "HUDCO", "INDIAMART",
+    "TANLA", "ONE97", "PAYTM", "ZOMATO", "NYKAA", "IXIGO", "DELHIVERY",
+    "BLUESTONE", "CARTRADE", "POLICYBZR", "MCX", "BSE",
+]
+BROAD_STOCKS = list(dict.fromkeys(BROAD_STOCKS))
+
 
 def _trade_targets(entry: dict, bullish: bool) -> Optional[dict]:
     """Rule-based T1/T2/SL with holding timeframes, matching agent.py logic."""
@@ -58,14 +107,14 @@ def _trade_targets(entry: dict, bullish: bool) -> Optional[dict]:
         return None
     if bullish:
         return {
-            "t1": round(cmp_price * 1.04, 2), "t1_tf": "2–4 sessions",
-            "t2": round(cmp_price * 1.09, 2), "t2_tf": "5–10 sessions",
-            "sl": round(cmp_price * 0.98, 2),
+            "t1": round(cmp_price * 1.008, 2), "t1_tf": "15–30 min",
+            "t2": round(cmp_price * 1.015, 2), "t2_tf": "1–2 hrs",
+            "sl": round(cmp_price * 0.995, 2),
         }
     return {
-        "t1": round(cmp_price * 0.96, 2), "t1_tf": "2–4 sessions",
-        "t2": round(cmp_price * 0.91, 2), "t2_tf": "5–10 sessions",
-        "sl": round(cmp_price * 1.02, 2),
+        "t1": round(cmp_price * 0.992, 2), "t1_tf": "15–30 min",
+        "t2": round(cmp_price * 0.985, 2), "t2_tf": "1–2 hrs",
+        "sl": round(cmp_price * 1.005, 2),
     }
 
 
@@ -77,10 +126,12 @@ class NiftyScanner:
         logger: logging.Logger,
         symbols: Optional[list[str]] = None,
         picks_file: str = PICKS_FILE,
+        source: str = "nifty",
     ) -> None:
         self._logger = logger
         self._symbols = symbols or NIFTY50
         self._picks_file = picks_file
+        self._source = source
         self._lock = threading.Lock()
         self._state: dict[str, Any] = {"status": "idle"}
         self._picks: Optional[dict] = self._load_picks()
@@ -126,6 +177,14 @@ class NiftyScanner:
         if self._picks is None:
             self._logger.info("No pick for today — starting NIFTY 50 scan.")
             self.start_scan()
+        elif self._picks:
+            # ensure today's already-made picks are in the performance history
+            self._record_history(self._picks)
+
+    def backfill_history(self) -> None:
+        """Record today's loaded picks into history (idempotent)."""
+        if self._picks:
+            self._record_history(self._picks)
 
     def _scan_worker(self) -> None:
         import yfinance as yf
@@ -179,7 +238,13 @@ class NiftyScanner:
                     "technicals": tech,
                     "news": [],
                 }
+                try:
+                    entry["intraday"] = _intraday_metrics(tk)
+                except Exception:
+                    entry["intraday"] = {}
                 entry["momentum_score"] = _momentum_score(entry)
+                entry["trend_bias"] = trend_bias(entry["momentum_score"])
+                entry["confidence"] = confidence_pct(entry)
                 return entry
             except Exception as exc:
                 self._logger.debug("Scan fetch failed for %s: %S", sym, exc)
@@ -197,17 +262,61 @@ class NiftyScanner:
 
         results.sort(key=lambda e: e["momentum_score"], reverse=True)
 
+        # Apply performance-agent tuning thresholds (agent_tuning.json)
+        tuning = _load_tuning()
+        min_conf = tuning.get("min_confidence", 0)
+        min_score = tuning.get("min_abs_score", 0)
+        min_vol = tuning.get("min_volume_ratio")
+        src_liquidity = tuning.get(f"{self._source}_liquidity_filter")
+
+        def eligible(e: dict) -> bool:
+            tech = e.get("technicals") or {}
+            if min_conf and (e.get("confidence") or 0) < min_conf:
+                return False
+            if min_score and abs(e.get("momentum_score") or 0) < min_score:
+                return False
+            if min_vol and (tech.get("volume_vs_20d_avg") or 0) < min_vol:
+                return False
+            if src_liquidity and (tech.get("latest_volume") or 0) < 500_000:
+                return False
+            return True
+
+        pool = [e for e in results if eligible(e)] or results
+
+        bull_min = tuning.get("bullish_min_confidence", 0)
+        bear_min = tuning.get("bearish_min_abs_score", 0)
+
+        bullish_candidates = [e for e in pool if e["momentum_score"] > 0]
+        if bull_min:
+            bullish_candidates = [
+                e for e in bullish_candidates if (e.get("confidence") or 0) >= bull_min
+            ] or bullish_candidates
+
+        bearish_candidates = [e for e in pool if e["momentum_score"] < 0]
+        if bear_min:
+            bearish_candidates = [
+                e for e in bearish_candidates if e["momentum_score"] <= -bear_min
+            ]
+
         picks = {
             "date": date.today().isoformat(),
             "scanned": len(results),
-            "bullish": results[0] if results else None,
-            "bearish": results[-1] if results else None,
+            "bullish": max(bullish_candidates, key=lambda e: e["momentum_score"], default=None) or (results[0] if results else None),
+            "bearish": min(bearish_candidates, key=lambda e: e["momentum_score"], default=None) or (results[-1] if results else None),
             "top5": [
-                {"symbol": e["symbol"], "score": e["momentum_score"], "cmp": e["technicals"]["cmp"]}
+                {
+                    "symbol": e["symbol"], "score": e["momentum_score"],
+                    "bias": e.get("trend_bias"), "confidence": e.get("confidence"),
+                    "cmp": e["technicals"]["cmp"],
+                }
                 for e in results[:5]
             ],
             "bottom5": [
-                {"symbol": e["symbol"], "score": e["momentum_score"], "cmp": e["technicals"]["cmp"]}
+                {
+                    "symbol": e["symbol"], "score": e["momentum_score"],
+                    "bias": e.get("trend_bias"), "confidence": e.get("confidence"),
+                    "cmp": e["technicals"]["cmp"],
+                }
                 for e in results[-5:]
             ],
         }
@@ -219,12 +328,49 @@ class NiftyScanner:
             self._picks = picks
             self._state = {"status": "done", "progress": f"{len(results)}/{total}", "error": ""}
         self._save_picks(picks)
+        self._record_history(picks)
         self._logger.info(
             "NIFTY scan complete: %d symbols. Bullish=%s Bearish=%s",
             len(results),
             picks["bullish"]["symbol"] if picks["bullish"] else "-",
             picks["bearish"]["symbol"] if picks["bearish"] else "-",
         )
+
+    # ------------------------------------------------------------------
+    # Pick history (for the performance agent)
+    # ------------------------------------------------------------------
+    def _record_history(self, picks: dict) -> None:
+        """Append today's bullish/bearish picks to pick_history.json."""
+        try:
+            try:
+                history = json.loads(open(PICK_HISTORY_FILE, encoding="utf-8").read())
+            except Exception:
+                history = []
+
+            existing = {
+                (h.get("date"), h.get("source"), h.get("side")) for h in history
+            }
+            for side in ("bullish", "bearish"):
+                p = picks.get(side)
+                if not p:
+                    continue
+                key = (picks["date"], self._source, side)
+                if key in existing:
+                    continue
+                entry_price = (p.get("quote") or {}).get("ltp") or (p.get("technicals") or {}).get("cmp")
+                history.append({
+                    "date": picks["date"],
+                    "source": self._source,
+                    "side": side,
+                    "symbol": p["symbol"],
+                    "entry_price": entry_price,
+                    "score": p.get("momentum_score"),
+                })
+
+            with open(PICK_HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(history[-500:], f, indent=2)
+        except Exception as exc:
+            self._logger.warning("Could not record pick history: %s", exc)
 
     # ------------------------------------------------------------------
     # Live pick view (with fresh quote for movement)
@@ -238,6 +384,11 @@ class NiftyScanner:
         for key, bullish in (("bullish", True), ("bearish", False)):
             p = picks.get(key)
             if p:
+                # backfill bias/confidence for picks recorded before this feature
+                if "trend_bias" not in p:
+                    p["trend_bias"] = trend_bias(p.get("momentum_score"))
+                if "confidence" not in p:
+                    p["confidence"] = confidence_pct(p)
                 self._refresh_quote(p)
                 p["targets"] = _trade_targets(p, bullish)
         return {"date": picks["date"], "status": "ready", "picks": picks}
