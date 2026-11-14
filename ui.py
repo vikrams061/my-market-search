@@ -188,12 +188,36 @@ INDEX_HTML = """<!DOCTYPE html>
     <h2>NIFTY Live Chart
       <span class="meta" style="font-size:.75rem;color:#64748b">candles from market-watch ticks</span>
       <span style="margin-left:.75rem">
-        <button class="scan-btn tf-btn active" data-tf="1" onclick="setTf(1,this)">1m</button>
-        <button class="scan-btn tf-btn" data-tf="5" onclick="setTf(5,this)">5m</button>
-        <button class="scan-btn tf-btn" data-tf="15" onclick="setTf(15,this)">15m</button>
+        <button class="scan-btn tf-btn" data-tf="5" onclick="setTf('5',this)">5m</button>
+        <button class="scan-btn tf-btn active" data-tf="15" onclick="setTf('15',this)">15m</button>
+        <button class="scan-btn tf-btn" data-tf="60" onclick="setTf('60',this)">1h</button>
+        <button class="scan-btn tf-btn" data-tf="D" onclick="setTf('D',this)">1D</button>
+        <button class="scan-btn" onclick="zoomChart(niftyChart,1.4)">+</button>
+        <button class="scan-btn" onclick="zoomChart(niftyChart,0.7)">&minus;</button>
+        <button class="scan-btn" onclick="niftyChart&&niftyChart.timeScale().fitContent()">Reset</button>
+        <button class="scan-btn tf-btn active" id="tf-candle-n" onclick="setSeriesType('nifty','candles')">Candles</button>
+        <button class="scan-btn tf-btn" id="tf-line-n" onclick="setSeriesType('nifty','line')">Line</button>
       </span>
     </h2>
     <div id="nifty-chart" style="height:320px"></div>
+
+    <div class="controls" style="margin-top:1rem">
+      <input id="stk-sym" placeholder="STOCK SYMBOL" maxlength="20" />
+      <select id="stk-kind"><option value="EQ">Stock</option><option value="INDEX">Index</option></select>
+      <button onclick="loadStockChart()">Load Chart</button>
+      <span style="margin-left:.75rem">
+        <button class="scan-btn tf-btn active" data-stf="5" onclick="setStf(5,this)">5m</button>
+        <button class="scan-btn tf-btn" data-stf="15" onclick="setStf(15,this)">15m</button>
+        <button class="scan-btn tf-btn" data-stf="60" onclick="setStf(60,this)">1h</button>
+        <button class="scan-btn tf-btn" data-stf="D" onclick="setStf('D',this)">D</button>
+        <button class="scan-btn" onclick="zoomChart(stkChart,1.4)">+</button>
+        <button class="scan-btn" onclick="zoomChart(stkChart,0.7)">&minus;</button>
+        <button class="scan-btn" onclick="stkChart&&stkChart.timeScale().fitContent()">Reset</button>
+        <button class="scan-btn tf-btn active" id="tf-candle-s" onclick="setSeriesType('stk','candles')">Candles</button>
+        <button class="scan-btn tf-btn" id="tf-line-s" onclick="setSeriesType('stk','line')">Line</button>
+      </span>
+    </div>
+    <div id="stk-chart" style="height:320px"></div>
   </div>
 
   <div class="analyst">
@@ -614,7 +638,7 @@ function simChart(id) {
     simCharts[id] = LightweightCharts.createChart(document.getElementById(id),
       {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
        grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
-       timeScale:{borderColor:'#334155'},rightPriceScale:{borderColor:'#334155'}});
+       timeScale:{borderColor:'#334155',timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#334155'}});
     simCharts[id]._series = simCharts[id].addCandlestickSeries({
       upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
       borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
@@ -652,9 +676,68 @@ refreshSim();
 setInterval(refreshSim, 3000);
 
 // ---- NIFTY live chart (candles built from market-watch ticks) -------------
-let niftyChart = null, niftySeries = null, chartTf = 1;
-function setTf(mins, btn) {
-  chartTf = mins;
+// breakout target lines (SL / T1 / T2 / T3) per chart
+const targetLines = {nifty: [], stk: []};
+function clearTargetLines(key, series) {
+  (targetLines[key] || []).forEach(l => { try { series.removePriceLine(l); } catch(e){} });
+  targetLines[key] = [];
+}
+function plotBreakoutTargets(key, series, entryPrice, isBuy, orSize, slPrice, orh, orl) {
+  clearTargetLines(key, series);
+  const m = isBuy ? 1 : -1;
+  if (slPrice == null) {
+    if (!orSize || orSize <= 0) return;
+    slPrice = entryPrice - m * orSize * 0.5;
+  }
+  targetLines[key] = [
+    series.createPriceLine({price: slPrice, color: '#f87171', lineWidth: 1, lineStyle: 3, title: 'SL'}),
+    series.createPriceLine({price: entryPrice + m * orSize * 1.0, color: '#4ade80', lineWidth: 1, lineStyle: 2, title: 'T1'}),
+    series.createPriceLine({price: entryPrice + m * orSize * 2.0, color: '#4ade80', lineWidth: 2, lineStyle: 2, title: 'T2'}),
+    series.createPriceLine({price: entryPrice + m * orSize * 3.0, color: '#38bdf8', lineWidth: 2, lineStyle: 1, title: 'T3'}),
+  ];
+}
+
+// IST time-of-day gate: 9:30-11:30 ok, 12:00-13:15 blackout,
+// 13:15-14:30 only with heavy volume (>1.5x rate), else closed
+function istMinutes(t) {
+  const s = new Date(t * 1000).toLocaleTimeString('en-GB',
+    {timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false});
+  const [h, m] = s.split(':').map(Number);
+  return h * 60 + m;
+}
+function timeGateOk(t, volRatio) {
+  const m = istMinutes(t);
+  if (m < 9 * 60 + 30 || m >= 14 * 60 + 30) return false;
+  if (m >= 12 * 60 && m < 13 * 60 + 15) return false;
+  if (m >= 13 * 60 + 15 && m < 14 * 60 + 30) return volRatio > 1.5;
+  return true;
+}
+
+// candles vs line series toggle (both series stay loaded; visibility toggles)
+const chartSeries = {nifty: {}, stk: {}};
+function setSeriesType(key, type) {
+  chartSeries[key].type = type;
+  const s = chartSeries[key];
+  if (s.candle) s.candle.applyOptions({visible: type === 'candles'});
+  if (s.line) s.line.applyOptions({visible: type === 'line'});
+  document.getElementById('tf-candle-' + (key === 'nifty' ? 'n' : 's')).classList.toggle('active', type === 'candles');
+  document.getElementById('tf-line-' + (key === 'nifty' ? 'n' : 's')).classList.toggle('active', type === 'line');
+}
+
+function zoomChart(chart, factor) {
+  if (!chart) return;
+  const ts = chart.timeScale();
+  const r = ts.getVisibleLogicalRange();
+  if (!r) { ts.fitContent(); return; }
+  const center = (r.from + r.to) / 2;
+  const half = (r.to - r.from) / 2 / factor;
+  ts.setVisibleLogicalRange({from: center - half, to: center + half});
+}
+
+let niftyChart = null, niftySeries = null, niftyOrh = null, niftyOrl = null, chartTf = '15', niftyFitted = false;
+function setTf(tf, btn) {
+  chartTf = tf;
+  niftyFitted = false;
   document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   refreshNiftyChart();
@@ -668,36 +751,221 @@ function initNiftyChart() {
   niftyChart = LightweightCharts.createChart(document.getElementById('nifty-chart'),
     {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
      grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
-     timeScale:{borderColor:'#334155'},rightPriceScale:{borderColor:'#334155'}});
+     timeScale:{borderColor:'#334155',timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#334155'}});
   niftySeries = niftyChart.addCandlestickSeries({
     upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
     borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
+  niftyOrh = niftySeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
+  niftyOrl = niftySeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
+  const niftyLine = niftyChart.addLineSeries({color:'#818cf8',lineWidth:2,visible:false});
+  chartSeries.nifty = {candle: niftySeries, line: niftyLine, type: 'candles'};
   refreshNiftyChart();
   setInterval(refreshNiftyChart, 10000);
 }
 async function refreshNiftyChart() {
   if (!niftySeries) return;
   try {
-    let d = await (await fetch(`/api/livechart?symbol=NIFTY&bucket=${chartTf * 60}`)).json();
-    if (!d.candles || d.candles.length < 2) {
-      const iv = chartTf === 1 ? '1m' : chartTf === 5 ? '5m' : '15m';
-      d = await (await fetch(`/api/chart?symbol=NIFTY&kind=INDEX&interval=${iv}`)).json();
-    }
-    // livechart returns OHLC; chart returns OHLC too — use as-is
+    const iv = chartTf === 'D' ? '1d' : chartTf === '60' ? '1h' : chartTf + 'm';
+    const d = await (await fetch(`/api/chart?symbol=NIFTY&kind=INDEX&interval=${iv}`)).json();
+    // up to 1 month of candles
     if (d.candles && d.candles.length) {
+      const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
+      d.candles = d.candles.filter(c => c.time >= cutoff);
       niftySeries.setData(d.candles);
-      // B/S marker on each candle (last 120 for readability)
-      niftySeries.setMarkers(d.candles.slice(-120).map(c => {
-        const up = c.close >= c.open;
-        return {time: c.time, position: up ? 'belowBar' : 'aboveBar',
-                color: up ? '#4ade80' : '#f87171', shape: 'circle',
-                text: up ? 'B' : 'S'};
-      }));
-      niftyChart.timeScale().fitContent();
+      if (chartSeries.nifty && chartSeries.nifty.line)
+        chartSeries.nifty.line.setData(d.candles.map(c => ({time: c.time, value: c.close})));
+      // hide ORH/ORL on Daily+ (no intraday opening range)
+      const isDaily = chartTf === 'D';
+      niftyOrh.applyOptions({visible: !isDaily});
+      niftyOrl.applyOptions({visible: !isDaily});
+      if (d.orh != null && !isDaily) niftyOrh.applyOptions({price: d.orh});
+      if (d.orl != null && !isDaily) niftyOrl.applyOptions({price: d.orl});
+      // markers: ORB crossover (ORB B/S) > B/S with wick+volume+cooldown filters
+      const orbMap = {};
+      (d.orb_markers || []).forEach(m => { orbMap[m.time] = m.side; });
+      const avgVol = d.candles.slice(-21, -1).reduce((a, c) => a + (c.volume || 0), 0)
+        / Math.max(1, Math.min(20, d.candles.length - 1));
+      const tfMinBase = chartTf === '60' ? 60 : chartTf === 'D' ? 1 : parseInt(chartTf) || 15;
+      const avgRateN = avgVol / tfMinBase;
+      let lastBull = 0, lastBear = 0, lastBrk = null;
+      const orSizeN = (d.orh != null && d.orl != null) ? d.orh - d.orl : 0;
+      const dailyOrN = d.daily_or || {};
+      const dayKey = t => new Date(t * 1000).toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+      niftySeries.setMarkers(d.candles.slice(-120).map((c, i, arr) => {
+        const orb = orbMap[c.time];
+        if (orb) {
+          const isBuy = orb === 'B';
+          lastBrk = {price: c.close, isBuy, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: isBuy ? 'belowBar' : 'aboveBar',
+                  color: isBuy ? '#4ade80' : '#f87171',
+                  shape: isBuy ? 'arrowUp' : 'arrowDown',
+                  text: isBuy ? 'ORB B' : 'ORB S'};
+        }
+        if (i === 0) return null;
+        const prev = arr[i - 1];
+        const range = c.high - c.low || 1;
+        const body = Math.abs(c.close - c.open);
+        const strongBody = body > range * 0.4;
+        const volumeValid = true;  // NIFTY index: volume unreliable
+        const vwapBull = c.vwap != null ? c.close > c.vwap : true;
+        const vwapBear = c.vwap != null ? c.close < c.vwap : true;
+        const dor = dailyOrN[dayKey(c.time)] || {};
+        const cOrh = dor.orh != null ? dor.orh : d.orh;
+        const cOrl = dor.orl != null ? dor.orl : d.orl;
+        const isBull = cOrh != null && prev.close <= cOrh && c.close > cOrh
+          && strongBody && volumeValid && vwapBull;
+        const isBear = cOrl != null && prev.close >= cOrl && c.close < cOrl
+          && strongBody && volumeValid && vwapBear;
+        if (isBull && c.time - lastBull > 3600) {
+          lastBull = c.time; lastBrk = {price: c.close, isBuy: true, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'belowBar', color: '#4ade80', shape: 'arrowUp', text: 'B'};
+        }
+        if (isBear && c.time - lastBear > 3600) {
+          lastBear = c.time; lastBrk = {price: c.close, isBuy: false, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'aboveBar', color: '#f87171', shape: 'arrowDown', text: 'S'};
+        }
+        return null;
+      }).filter(Boolean));
+      const orSizeFor = t => {
+        const dor = dailyOrN[dayKey(t)];
+        if (dor) return dor.orh - dor.orl;
+        return orSizeN;
+      };
+      // ATR trailing SL: buy -> candle low - 0.5*ATR, sell -> candle high + 0.5*ATR
+      const slFor = b => (b.atr != null)
+        ? (b.isBuy ? b.low - 0.5 * b.atr : b.high + 0.5 * b.atr)
+        : (orSizeFor(b.t) > 0 ? b.price - (b.isBuy ? 1 : -1) * orSizeFor(b.t) * 0.5 : null);
+      if (lastBrk) {
+        const slPx = slFor(lastBrk);
+        const lastClose = d.candles[d.candles.length - 1].close;
+        const slHit = slPx != null && (lastBrk.isBuy ? lastClose <= slPx : lastClose >= slPx);
+        const dorB = dailyOrN[dayKey(lastBrk.t)] || {};
+        const activeOrh = dorB.orh != null ? dorB.orh : d.orh;
+        const activeOrl = dorB.orl != null ? dorB.orl : d.orl;
+        if (slHit) clearTargetLines('nifty', niftySeries);
+        else plotBreakoutTargets('nifty', niftySeries, lastBrk.price, lastBrk.isBuy, orSizeFor(lastBrk.t), slPx, activeOrh, activeOrl);
+      } else clearTargetLines('nifty', niftySeries);
+      if (!niftyFitted) { niftyChart.timeScale().fitContent(); niftyFitted = true; }
     }
   } catch (e) {}
 }
 initNiftyChart();
+
+// ---- Stock chart (any symbol, candlesticks + B/S markers) ------------------
+let stkChart = null, stkSeries = null, stkOrh = null, stkOrl = null, stkTf = '5', stkSymbol = '', stkFitted = false, stkKind = 'EQ';
+function setStf(tf, btn) {
+  stkTf = tf;
+  stkFitted = false;
+  document.querySelectorAll('[data-stf]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (stkSymbol) loadStockChart();
+}
+function loadStockChart() {
+  const sym = document.getElementById('stk-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('stk-kind').value;
+  if (!sym) return;
+  stkSymbol = sym; stkKind = kind;
+  refreshStockChart();
+}
+async function refreshStockChart() {
+  if (!stkSymbol) return;
+  if (!stkSeries) {
+    if (typeof LightweightCharts === 'undefined') { setTimeout(refreshStockChart, 1000); return; }
+    stkChart = LightweightCharts.createChart(document.getElementById('stk-chart'),
+      {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
+       grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
+       timeScale:{borderColor:'#334155',timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#334155'}});
+    stkSeries = stkChart.addCandlestickSeries({
+      upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
+      borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
+    stkOrh = stkSeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
+    stkOrl = stkSeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
+    const stkLine = stkChart.addLineSeries({color:'#818cf8',lineWidth:2,visible:false});
+    chartSeries.stk = {candle: stkSeries, line: stkLine, type: 'candles'};
+  }
+  try {
+    const iv = stkTf === 'D' ? '1d' : stkTf + 'm';
+    const d = await (await fetch(`/api/chart?symbol=${stkSymbol}&kind=${kind}&interval=${iv}`)).json();
+    if (d.candles && d.candles.length) {
+      const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
+      d.candles = d.candles.filter(c => c.time >= cutoff);
+      stkSeries.setData(d.candles);
+      if (chartSeries.stk && chartSeries.stk.line)
+        chartSeries.stk.line.setData(d.candles.map(c => ({time: c.time, value: c.close})));
+      const isDailyS = stkTf === 'D';
+      stkOrh.applyOptions({visible: !isDailyS});
+      stkOrl.applyOptions({visible: !isDailyS});
+      if (d.orh != null && !isDailyS) stkOrh.applyOptions({price: d.orh});
+      if (d.orl != null && !isDailyS) stkOrl.applyOptions({price: d.orl});
+      const orbMap = {};
+      (d.orb_markers || []).forEach(m => { orbMap[m.time] = m.side; });
+      const avgVolS = d.candles.slice(-21, -1).reduce((a, c) => a + (c.volume || 0), 0)
+        / Math.max(1, Math.min(20, d.candles.length - 1));
+      const tfMinBaseS = stkTf === '60' ? 60 : stkTf === 'D' ? 1 : parseInt(stkTf) || 5;
+      const avgRateBaseS = avgVolS / tfMinBaseS;
+      let lastBullS = 0, lastBearS = 0, lastBrkS = null;
+      const orSizeS = (d.orh != null && d.orl != null) ? d.orh - d.orl : 0;
+      const dailyOrS = d.daily_or || {};
+      const dayKeyS = t => new Date(t * 1000).toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+      stkSeries.setMarkers(d.candles.slice(-120).map((c, i, arr) => {
+        const orb = orbMap[c.time];
+        if (orb) {
+          const isBuy = orb === 'B';
+          lastBrkS = {price: c.close, isBuy, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: isBuy ? 'belowBar' : 'aboveBar',
+                  color: isBuy ? '#4ade80' : '#f87171',
+                  shape: isBuy ? 'arrowUp' : 'arrowDown',
+                  text: isBuy ? 'ORB B' : 'ORB S'};
+        }
+        if (i === 0) return null;
+        const prev = arr[i - 1];
+        const range = c.high - c.low || 1;
+        const body = Math.abs(c.close - c.open);
+        const strongBody = body > range * 0.4;
+        const volumeValidS = stkKind === 'INDEX' || avgVolS <= 0
+          || (c.volume || 0) / tfMinBaseS > (avgVolS / tfMinBaseS) * 1.2;
+        const vwapBullS = c.vwap != null ? c.close > c.vwap : true;
+        const vwapBearS = c.vwap != null ? c.close < c.vwap : true;
+        const dorS = dailyOrS[dayKeyS(c.time)] || {};
+        const cOrhS = dorS.orh != null ? dorS.orh : d.orh;
+        const cOrlS = dorS.orl != null ? dorS.orl : d.orl;
+        const isBull = cOrhS != null && prev.close <= cOrhS && c.close > cOrhS
+          && strongBody && volumeValidS && vwapBullS;
+        const isBear = cOrlS != null && prev.close >= cOrlS && c.close < cOrlS
+          && strongBody && volumeValidS && vwapBearS;
+        if (isBull && c.time - lastBullS > 3600) {
+          lastBullS = c.time; lastBrkS = {price: c.close, isBuy: true, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'belowBar', color: '#4ade80', shape: 'arrowUp', text: 'B'};
+        }
+        if (isBear && c.time - lastBearS > 3600) {
+          lastBearS = c.time; lastBrkS = {price: c.close, isBuy: false, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'aboveBar', color: '#f87171', shape: 'arrowDown', text: 'S'};
+        }
+        return null;
+      }).filter(Boolean));
+      const orSizeForS = t => {
+        const dor = dailyOrS[dayKeyS(t)];
+        if (dor) return dor.orh - dor.orl;
+        return orSizeS;
+      };
+      const slForS = b => (b.atr != null)
+        ? (b.isBuy ? b.low - 0.5 * b.atr : b.high + 0.5 * b.atr)
+        : (orSizeForS(b.t) > 0 ? b.price - (b.isBuy ? 1 : -1) * orSizeForS(b.t) * 0.5 : null);
+      if (lastBrkS) {
+        const slPxS = slForS(lastBrkS);
+        const lastCloseS = d.candles[d.candles.length - 1].close;
+        const slHitS = slPxS != null && (lastBrkS.isBuy ? lastCloseS <= slPxS : lastCloseS >= slPxS);
+        const dorBS = dailyOrS[dayKeyS(lastBrkS.t)] || {};
+        const activeOrhS = dorBS.orh != null ? dorBS.orh : d.orh;
+        const activeOrlS = dorBS.orl != null ? dorBS.orl : d.orl;
+        if (slHitS) clearTargetLines('stk', stkSeries);
+        else plotBreakoutTargets('stk', stkSeries, lastBrkS.price, lastBrkS.isBuy, orSizeForS(lastBrkS.t), slPxS, activeOrhS, activeOrlS);
+      } else clearTargetLines('stk', stkSeries);
+      if (!stkFitted) { stkChart.timeScale().fitContent(); stkFitted = true; }
+    }
+  } catch (e) {}
+}
+setInterval(refreshStockChart, 60000);
 
 // ---- Trend & momentum quick check ----------------------------------------
 async function checkSymbol() {
@@ -1061,6 +1329,7 @@ def create_app(
 
     @app.get("/api/chart")
     async def chart(symbol: str, kind: str = "EQ", interval: str = "15m") -> dict:
+        import pandas as pd
         import yfinance as yf
 
         idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^CNXFIN"}
@@ -1070,16 +1339,122 @@ def create_app(
             if kind.upper() == "INDEX" else f"{symbol.upper()}.NS"
         )
         try:
-            df = yf.Ticker(ys).history(period="5d", interval=interval, auto_adjust=False)
+            df = yf.Ticker(ys).history(period="1mo", interval=interval, auto_adjust=False)
             if df is None or df.empty:
                 return {"candles": []}
-            candles = [
-                {"time": int(ts.timestamp()), "open": round(float(r["Open"]), 2),
-                 "high": round(float(r["High"]), 2), "low": round(float(r["Low"]), 2),
-                 "close": round(float(r["Close"]), 2)}
-                for ts, r in df.iterrows()
-            ]
-            return {"candles": candles}
+
+            # anchor index to IST wall-clock
+            if df.index.tz is not None:
+                df.index = df.index.tz_convert("Asia/Kolkata")
+            else:
+                df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+
+            candles = []
+            for ts, r in df.iterrows():
+                # epoch of the IST wall-clock (chart renders it as local time)
+                candles.append({
+                    "time": int(ts.tz_localize(None).timestamp()), "open": round(float(r["Open"]), 2),
+                    "high": round(float(r["High"]), 2), "low": round(float(r["Low"]), 2),
+                    "close": round(float(r["Close"]), 2),
+                    "volume": int(r["Volume"]) if not pd.isna(r["Volume"]) else 0})
+
+            # session VWAP per candle (cumulative typical-price VWAP per day)
+            try:
+                tp = (df["High"] + df["Low"] + df["Close"]) / 3
+                pv = tp * df["Volume"]
+                vv = df["Volume"].replace(0, float("nan"))
+                cum_pv = pv.groupby(df.index.date).cumsum()
+                cum_vv = vv.groupby(df.index.date).cumsum()
+                vwap_series = (cum_pv / cum_vv)
+                for c, (_, r) in zip(candles, df.iterrows()):
+                    v = vwap_series.loc[r.name]
+                    if pd.notna(v):
+                        c["vwap"] = round(float(v), 2)
+                # ATR(14) per candle for trailing-stop logic
+                pc = df["Close"].shift(1)
+                tr = pd.concat([df["High"] - df["Low"],
+                                (df["High"] - pc).abs(),
+                                (df["Low"] - pc).abs()], axis=1).max(axis=1)
+                atr_s = tr.rolling(14, min_periods=1).mean()
+                for c, (_, r) in zip(candles, df.iterrows()):
+                    a = atr_s.loc[r.name]
+                    if pd.notna(a):
+                        c["atr"] = round(float(a), 2)
+            except Exception:
+                pass
+
+            # --- per-day ORH/ORL map (each day's first 15 min) ---
+            daily_or = {}
+            try:
+                dfi = df.tz_convert("Asia/Kolkata") if df.index.tz is not None else df.tz_localize("Asia/Kolkata")
+                for day, g in dfi.groupby(dfi.index.date):
+                    if len(g) < 5:
+                        continue
+                    orb_end = g.index[0] + pd.Timedelta(minutes=15)
+                    orb = g[g.index <= orb_end]
+                    if len(orb):
+                        # POC proxy: volume-weighted typical price inside OR window
+                        tp = (orb["High"] + orb["Low"] + orb["Close"]) / 3
+                        w = orb["Volume"].replace(0, float("nan"))
+                        poc = float((tp * w).sum() / w.sum()) if w.sum() else float(tp.mean())
+                        daily_or[str(day)] = {
+                            "orh": round(float(orb["High"].max()), 2),
+                            "orl": round(float(orb["Low"].min()), 2),
+                            "poc": round(poc, 2),
+                        }
+            except Exception:
+                pass
+
+            # --- ORB breakout: crossover + volume, fires once per side ---
+            orh = orl = None
+            orb_markers = []
+            try:
+                intraday = interval not in {"1d", "1wk", "1mo"}
+                if intraday and len(df) > 30:
+                    dfi = df.tz_convert("Asia/Kolkata") if df.index.tz is not None else df.tz_localize("Asia/Kolkata")
+                    today = dfi.index[-1].date()
+                    day = dfi[dfi.index.date == today].copy()
+                    day["avg_vol"] = day["Volume"].rolling(10, min_periods=1).mean()
+                    orb_end = day.index[0] + pd.Timedelta(minutes=15)
+                    orb_win = day[day.index <= orb_end]
+                    if len(orb_win):
+                        orh, orl = float(orb_win["High"].max()), float(orb_win["Low"].min())
+                        # OR-width vs ATR(14): skip markers if range already overextended
+                        pc = day["Close"].shift(1)
+                        tr = pd.concat([
+                            day["High"] - day["Low"],
+                            (day["High"] - pc).abs(),
+                            (day["Low"] - pc).abs()], axis=1).max(axis=1)
+                        atr14 = float(tr.rolling(14, min_periods=1).mean().iloc[-1])
+                        or_too_wide = atr14 > 0 and (orh - orl) > 1.5 * atr14
+                        # index feeds may report 0 volume — treat avg_vol<=0 as valid
+                        avg_vol_all = float(day["avg_vol"].mean())
+                        vol_ok_feed = avg_vol_all > 0
+                        post = day[day.index > orb_end]
+                        bull_fired = bear_fired = False
+                        for i in range(1, len(post)):
+                            prev, curr = post.iloc[i - 1], post.iloc[i]
+                            av = curr["avg_vol"]
+                            if pd.isna(av) or or_too_wide:
+                                continue
+                            vol_ok = (curr["Volume"] > av * 1.2) if vol_ok_feed else True
+                            if not vol_ok:
+                                continue
+                            if (not bull_fired and prev["Close"] <= orh
+                                    and curr["Close"] > orh
+                                    and curr["Volume"] > av * 1.2):
+                                orb_markers.append({"time": int(curr.name.timestamp()), "side": "B"})
+                                bull_fired = True
+                            elif (not bear_fired and prev["Close"] >= orl
+                                    and curr["Close"] < orl
+                                    and curr["Volume"] > av * 1.2):
+                                orb_markers.append({"time": int(curr.name.timestamp()), "side": "S"})
+                                bear_fired = True
+            except Exception:
+                pass
+
+            return {"candles": candles, "orh": orh, "orl": orl,
+                    "orb_markers": orb_markers, "daily_or": daily_or}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
