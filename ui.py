@@ -718,6 +718,7 @@ const chartSeries = {nifty: {}, stk: {}};
 function setSeriesType(key, type) {
   chartSeries[key].type = type;
   const s = chartSeries[key];
+  if (!s || !s.candle) return;
   if (s.candle) s.candle.applyOptions({visible: type === 'candles'});
   if (s.line) s.line.applyOptions({visible: type === 'line'});
   document.getElementById('tf-candle-' + (key === 'nifty' ? 'n' : 's')).classList.toggle('active', type === 'candles');
@@ -738,7 +739,7 @@ let niftyChart = null, niftySeries = null, niftyOrh = null, niftyOrl = null, cha
 function setTf(tf, btn) {
   chartTf = tf;
   niftyFitted = false;
-  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('[data-tf]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   refreshNiftyChart();
 }
@@ -1351,9 +1352,9 @@ def create_app(
 
             candles = []
             for ts, r in df.iterrows():
-                # epoch of the IST wall-clock (chart renders it as local time)
+                # epoch seconds (UTC); IST conversion above is only for grouping
                 candles.append({
-                    "time": int(ts.tz_localize(None).timestamp()), "open": round(float(r["Open"]), 2),
+                    "time": int(ts.timestamp()), "open": round(float(r["Open"]), 2),
                     "high": round(float(r["High"]), 2), "low": round(float(r["Low"]), 2),
                     "close": round(float(r["Close"]), 2),
                     "volume": int(r["Volume"]) if not pd.isna(r["Volume"]) else 0})
@@ -1442,12 +1443,12 @@ def create_app(
                                 continue
                             if (not bull_fired and prev["Close"] <= orh
                                     and curr["Close"] > orh
-                                    and curr["Volume"] > av * 1.2):
+                                    and vol_ok):
                                 orb_markers.append({"time": int(curr.name.timestamp()), "side": "B"})
                                 bull_fired = True
                             elif (not bear_fired and prev["Close"] >= orl
                                     and curr["Close"] < orl
-                                    and curr["Volume"] > av * 1.2):
+                                    and vol_ok):
                                 orb_markers.append({"time": int(curr.name.timestamp()), "side": "S"})
                                 bear_fired = True
             except Exception:
