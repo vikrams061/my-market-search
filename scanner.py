@@ -13,8 +13,9 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from agent import (
     _ema, _intraday_metrics, _macd, _momentum_score, _news_sentiment, _rsi, _sma,
@@ -186,7 +187,24 @@ class NiftyScanner:
         if self._picks:
             self._record_history(self._picks)
 
+    @staticmethod
+    def _in_scan_window() -> bool:
+        """True Mon–Fri 09:15–15:30 IST — scans outside market hours produce
+        stale EOD picks that corrupt performance tracking."""
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        if now.weekday() >= 5:
+            return False
+        mins = now.hour * 60 + now.minute
+        return 9 * 60 + 15 <= mins <= 15 * 60 + 30
+
     def _scan_worker(self) -> None:
+        if not self._in_scan_window():
+            with self._lock:
+                self._state = {
+                    "status": "done", "progress": "",
+                    "error": "Market closed — scans run Mon–Fri 09:15–15:30 IST.",
+                }
+            return
         import yfinance as yf
 
         results: list[dict] = []
@@ -300,6 +318,7 @@ class NiftyScanner:
 
         picks = {
             "date": date.today().isoformat(),
+            "time": datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M"),
             "scanned": len(results),
             "bullish": max(bullish_candidates, key=lambda e: e["momentum_score"], default=None) or (results[0] if results else None),
             "bearish": min(bearish_candidates, key=lambda e: e["momentum_score"], default=None) or (results[-1] if results else None),
@@ -339,8 +358,21 @@ class NiftyScanner:
     # ------------------------------------------------------------------
     # Pick history (for the performance agent)
     # ------------------------------------------------------------------
+    @staticmethod
+    def _in_record_window() -> bool:
+        """True only Mon–Fri 09:30–15:15 IST — picks logged outside market
+        hours get stale entry prices (entry == close) and corrupt stats."""
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        if now.weekday() >= 5:
+            return False
+        mins = now.hour * 60 + now.minute
+        return 9 * 60 + 30 <= mins <= 15 * 60 + 15
+
     def _record_history(self, picks: dict) -> None:
         """Append today's bullish/bearish picks to pick_history.json."""
+        if not self._in_record_window():
+            self._logger.debug("Skipping pick history outside market hours (09:30–15:15 IST).")
+            return
         try:
             try:
                 history = json.loads(open(PICK_HISTORY_FILE, encoding="utf-8").read())
@@ -348,24 +380,29 @@ class NiftyScanner:
                 history = []
 
             existing = {
-                (h.get("date"), h.get("source"), h.get("side")) for h in history
+                (h.get("date"), h.get("source"), h.get("side")): h for h in history
             }
             for side in ("bullish", "bearish"):
                 p = picks.get(side)
                 if not p:
                     continue
                 key = (picks["date"], self._source, side)
-                if key in existing:
-                    continue
                 entry_price = (p.get("quote") or {}).get("ltp") or (p.get("technicals") or {}).get("cmp")
-                history.append({
+                row = {
                     "date": picks["date"],
+                    "time": picks.get("time"),
                     "source": self._source,
                     "side": side,
                     "symbol": p["symbol"],
                     "entry_price": entry_price,
                     "score": p.get("momentum_score"),
-                })
+                }
+                if key in existing:
+                    # rescan changed the pick — keep history in sync with what's displayed
+                    if existing[key].get("symbol") != p["symbol"]:
+                        existing[key].update(row)
+                    continue
+                history.append(row)
 
             with open(PICK_HISTORY_FILE, "w", encoding="utf-8") as f:
                 json.dump(history[-500:], f, indent=2)

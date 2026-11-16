@@ -159,10 +159,21 @@ INDEX_HTML = """<!DOCTYPE html>
     <button class="tab-btn" onclick="switchTab('options', this)">Options Desk</button>
     <button class="tab-btn" onclick="switchTab('orb', this)">ORB / VWAP</button>
     <button class="tab-btn" onclick="switchTab('credit', this)">Credit Desk</button>
-    <button class="tab-btn" onclick="switchTab('fno', this)">F&O Sim</button>
+    <button class="tab-btn" onclick="switchTab('perf', this)">Performance</button>
   </div>
 
   <div class="tab-pane active" id="pane-dashboard">
+  <div class="analyst" style="margin-bottom:.75rem">
+    <h2>Today's Performance <span class="meta" style="font-size:.75rem;color:#64748b">IST · live mark-to-market</span></h2>
+    <div class="perf-grid" id="dash-perf"></div>
+    <table id="dash-perf-table" style="margin-top:.5rem">
+      <thead><tr>
+        <th>Date/Time</th><th>Agent</th><th>Side</th><th>Symbol</th>
+        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
+      </tr></thead>
+      <tbody id="dash-perf-rows"></tbody>
+    </table>
+  </div>
   <div class="controls">
     <input id="sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
     <select id="kind">
@@ -238,36 +249,9 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="stk2-chart" style="height:320px"></div>
   </div>
 
-  <div class="analyst">
-    <h2>Trade Tracker</h2>
-    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Track any stock, index, or option (CE/PE) with entry, target &amp; stop-loss — live status and P&L.</div>
-    <div class="controls">
-      <select id="tr-asset" onchange="trAssetChange()">
-        <option value="EQ">Stock/Index</option>
-        <option value="OPTION">Option</option>
-      </select>
-      <input id="tr-sym" placeholder="Symbol / Underlying (e.g. RELIANCE, NIFTY)" maxlength="30" />
-      <select id="tr-kind"><option value="EQ">Stock</option><option value="INDEX">Index</option></select>
-      <select id="tr-side"><option value="long">Long</option><option value="short">Short</option></select>
-      <input id="tr-entry" placeholder="Entry ₹" type="number" step="0.01" style="width:90px" />
-      <input id="tr-target" placeholder="Target ₹" type="number" step="0.01" style="width:90px" />
-      <input id="tr-sl" placeholder="Stop ₹" type="number" step="0.01" style="width:90px" />
-      <button onclick="addTrade()">+ Track</button>
-    </div>
-    <div class="controls" id="tr-opt-row" style="display:none">
-      <input id="tr-expiry" type="date" style="width:140px" />
-      <input id="tr-strike" placeholder="Strike ₹" type="number" step="0.01" style="width:90px" />
-      <select id="tr-opttype"><option value="CE">CE (Call)</option><option value="PE">PE (Put)</option></select>
-    </div>
-    <table id="trade-table">
-      <thead><tr>
-        <th>Symbol</th><th>Type</th><th class="num">Entry</th><th class="num">Current</th>
-        <th class="num">Target</th><th class="num">Stop</th><th class="num">P&L</th><th>Status</th><th></th>
-      </tr></thead>
-      <tbody id="trade-rows"></tbody>
-    </table>
-  </div>
+  </div><!-- /pane-dashboard -->
 
+  <div class="tab-pane" id="pane-perf">
   <div class="analyst">
     <h2>Agent Performance
       <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
@@ -281,10 +265,12 @@ INDEX_HTML = """<!DOCTYPE html>
       </tr></thead>
       <tbody id="perf-rows"></tbody>
     </table>
+    <h3 style="margin-top:1rem">Agent Performance &amp; Improvements</h3>
+    <div id="outcome-stats"></div>
     <div id="optimizer" style="margin-top:.75rem"></div>
 
   </div>
-  </div><!-- /pane-dashboard -->
+  </div><!-- /pane-perf -->
 
   <div class="tab-pane" id="pane-analyst">
   <div class="analyst">
@@ -396,33 +382,6 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="credit-report"></div>
   </div>
   </div><!-- /pane-credit -->
-
-  <div class="tab-pane" id="pane-fno">
-  <div class="analyst">
-    <h2>F&amp;O Intraday Simulation <span class="meta" style="font-size:.75rem;color:#64748b">SIMULATED DATA — mock feed</span>
-      <button class="scan-btn" onclick="refreshSim()" style="margin-left:.75rem">Refresh</button>
-    </h2>
-    <div class="meta" id="sim-telemetry" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-      <div>
-        <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">NIFTY Futures 5m</div>
-        <div id="sim-fut" style="height:300px"></div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:.75rem">
-        <div>
-          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Call (CE) <b id="sim-ce-px" style="color:#4ade80">—</b></div>
-          <div id="sim-ce" style="height:140px"></div>
-        </div>
-        <div>
-          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Put (PE) <b id="sim-pe-px" style="color:#f87171">—</b></div>
-          <div id="sim-pe" style="height:140px"></div>
-        </div>
-      </div>
-    </div>
-    <h3 style="margin-top:1rem">Virtual P&amp;L Ledger</h3>
-    <div id="sim-ledger" style="font-size:.85rem"></div>
-  </div>
-  </div><!-- /pane-fno -->
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script>
@@ -650,52 +609,6 @@ async function startActiveScan() {
   setInterval(activeScanStatus, 2000);
   activeScanStatus();
 }
-
-// ---- F&O simulation -------------------------------------------------------
-let simCharts = {};
-function simChart(id) {
-  if (!simCharts[id]) {
-    simCharts[id] = LightweightCharts.createChart(document.getElementById(id),
-      {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
-       grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
-       timeScale:{borderColor:'#334155',timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#334155'}});
-    simCharts[id]._series = simCharts[id].addCandlestickSeries({
-      upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
-      borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
-    simCharts[id]._vwap = simCharts[id]._series.createPriceLine({color:'#fbbf24',lineWidth:1,lineStyle:2,title:'VWAP'});
-    simCharts[id]._orh = simCharts[id]._series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
-    simCharts[id]._orl = simCharts[id]._series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
-  }
-  return simCharts[id];
-}
-async function refreshSim() {
-  // charts need a visible container — wait until the tab is active
-  const pane = document.getElementById('pane-fno');
-  if (pane && !pane.classList.contains('active')) return;
-  try {
-    const d = await (await fetch('/api/sim')).json();
-    for (const [key, el] of [['FUT','sim-fut'],['CE','sim-ce'],['PE','sim-pe']]) {
-      const ch = simChart(el); const s = ch._series;
-      s.setData(d[key].candles);
-      if (d[key].vwap != null) ch._vwap.applyOptions({price: d[key].vwap});
-      if (d[key].orh != null) ch._orh.applyOptions({price: d[key].orh});
-      if (d[key].orl != null) ch._orl.applyOptions({price: d[key].orl});
-      s.setMarkers(d[key].markers || []);
-      ch.timeScale().fitContent();
-    }
-    const t = d.telemetry || {};
-    document.getElementById('sim-ce-px').textContent = '₹' + (d.ce_px ?? '—');
-    document.getElementById('sim-pe-px').textContent = '₹' + (d.pe_px ?? '—');
-    document.getElementById('sim-telemetry').innerHTML =
-      `Spot <b>${d.spot ?? '—'}</b> · ATM Strike <b>${d.atm_strike}</b> · State <b class="${t.state==='BUY_CALL'||t.state==='BUY_PUT'?'up':t.state==='THETA_DECAY'||t.state==='EXHAUSTION'?'down':'flat'}">${t.state}</b> · ${t.detail||''} · Trades ${t.trades_today||0}/3`;
-    const led = (t.ledger||[]).map(x =>
-      `<div>${x.side} ${x.strike} @ ${x.entry} → ${x.exit ?? '—'} | SL ${x.sl ?? '—'} · Tgt ${x.target ?? '—'} | <b class="${(x.pnl_inr||0)>=0?'up':'down'}">₹${x.pnl_inr ?? '—'}</b> ${x.exit_reason||''}</div>`).join('');
-    const act = t.active ? `<div style="color:#fbbf24">OPEN ${t.active.side} ${t.active.strike} @ ${t.active.entry} → now ${t.active.last||'—'} | SL ${t.active.sl ?? '—'} · Tgt ${t.active.target ?? '—'}</div>` : '';
-    document.getElementById('sim-ledger').innerHTML = act + led || '<span style="color:#64748b">No trades yet</span>';
-  } catch (e) {}
-}
-refreshSim();
-setInterval(refreshSim, 3000);
 
 // ---- NIFTY live chart (candles built from market-watch ticks) -------------
 // breakout target lines (SL / T1 / T2 / T3) per chart
@@ -1138,7 +1051,7 @@ async function runCredit() {
           <td><button class="scan-btn" onclick='trackCredit(${JSON.stringify(t)})'>+ Add</button></td>
         </tr>`).join('')}</tbody>
       </table>
-      <div class="meta" style="font-size:.75rem;color:#64748b;margin-top:.4rem">Credits &amp; levels are estimates — verify on NSE option chain. Added trades appear in Dashboard → Trade Tracker.</div>`;
+      <div class="meta" style="font-size:.75rem;color:#64748b;margin-top:.4rem">Credits &amp; levels are estimates — verify on NSE option chain.</div>`;
     }
   } catch (e) {
     statusEl.textContent = 'Request failed';
@@ -1164,13 +1077,40 @@ async function refreshPerf(force) {
     const cell = (label, val, color) =>
       `<div class="perf-stat"><div class="label">${label}</div>
        <div class="value" style="color:${color || '#e2e8f0'}">${val}</div></div>`;
-    const o = stats.overall || {};
-    document.getElementById('perf-stats').innerHTML =
+    const perfCells = o =>
       cell('Total Picks', o.picks ?? '—') +
       cell('Win Rate', o.win_rate != null ? o.win_rate + '%' : '—', o.win_rate >= 50 ? '#4ade80' : '#f87171') +
       cell('Avg Return', o.avg_return != null ? sgn(o.avg_return) + o.avg_return + '%' : '—', cls(o.avg_return)) +
       cell('Best', o.best != null ? '+' + o.best + '%' : '—', '#4ade80') +
       cell('Worst', o.worst != null ? o.worst + '%' : '—', '#f87171');
+
+    // today-only stats for the dashboard widget (IST)
+    const today = new Date().toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+    const tRows = (d.rows || []).filter(r => r.date === today);
+    const rets = tRows.map(r => r.return_pct).filter(x => x != null);
+    const avg = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : null;
+    const dashEl = document.getElementById('dash-perf');
+    if (dashEl) dashEl.innerHTML = perfCells({
+      picks: tRows.length,
+      win_rate: rets.length ? Math.round(100 * rets.filter(x => x > 0).length / rets.length) : null,
+      avg_return: avg != null ? Math.round(avg * 100) / 100 : null,
+      best: rets.length ? Math.max(...rets) : null,
+      worst: rets.length ? Math.min(...rets) : null,
+    });
+    const dashRows = document.getElementById('dash-perf-rows');
+    if (dashRows) dashRows.innerHTML = tRows.map(r => `<tr>
+      <td>${r.date} ${r.time || ''}</td>
+      <td>${r.source}</td>
+      <td>${r.side}</td>
+      <td>${r.symbol}</td>
+      <td class="num">${r.entry != null ? fmtInr(r.entry) : '—'}</td>
+      <td class="num">${r.current != null ? fmtInr(r.current) : '—'}</td>
+      <td class="num ${cls(r.return_pct)}">${r.return_pct != null ? sgn(r.return_pct) + r.return_pct + '%' : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:#64748b">No picks yet today</td></tr>';
+
+    // Performance tab: all-time stats
+    const o = stats.overall || {};
+    document.getElementById('perf-stats').innerHTML = perfCells(o);
 
     // Per-agent cards with description + track record
     const AGENTS = [
@@ -1196,7 +1136,7 @@ async function refreshPerf(force) {
     }).join('');
     const rows = document.getElementById('perf-rows');
     rows.innerHTML = (d.rows || []).map(r => `<tr>
-      <td>${r.date}${r.is_today ? '<span class="today-tag">today</span>' : ''}</td>
+      <td>${r.date} ${r.time || ''}${r.is_today ? '<span class="today-tag">today</span>' : ''}</td>
       <td>${r.source}</td>
       <td>${r.side}</td>
       <td>${r.symbol}</td>
@@ -1204,6 +1144,29 @@ async function refreshPerf(force) {
       <td class="num">${r.current != null ? fmtInr(r.current) : '—'}</td>
       <td class="num ${cls(r.return_pct)}">${r.return_pct != null ? sgn(r.return_pct) + r.return_pct + '%' : '—'}</td>
     </tr>`).join('') || '<tr><td colspan="7" style="color:#64748b">No picks recorded yet</td></tr>';
+    // Per-agent performance table + improvement tuning (agent_tuning.json)
+    const srcStats = stats.by_source || {};
+    const agentRows = Object.entries(srcStats).map(([src, s]) => `<tr>
+      <td>${src}</td><td class="num">${s.picks ?? '—'}</td><td class="num">${s.scored ?? '—'}</td>
+      <td class="num">${s.win_rate != null ? s.win_rate + '%' : '—'}</td>
+      <td class="num ${cls(s.avg_return)}">${s.avg_return != null ? sgn(s.avg_return) + s.avg_return + '%' : '—'}</td>
+      <td class="num ${cls(s.best)}">${s.best != null ? '+' + s.best + '%' : '—'}</td>
+      <td class="num ${cls(s.worst)}">${s.worst != null ? s.worst + '%' : '—'}</td>
+    </tr>`).join('');
+    const tuning = d.tuning || {};
+    const tuningRows = Object.entries(tuning).map(([k, v]) =>
+      `<tr><td>${k}</td><td>${typeof v === 'boolean' ? (v ? 'ON' : 'OFF') : v}</td></tr>`).join('');
+    document.getElementById('outcome-stats').innerHTML = `
+      <table id="agent-perf-table"><thead><tr>
+        <th>Agent</th><th class="num">Picks</th><th class="num">Scored</th>
+        <th class="num">Win%</th><th class="num">Avg</th><th class="num">Best</th><th class="num">Worst</th>
+      </tr></thead><tbody>${agentRows || '<tr><td colspan="7" style="color:#64748b">No scored picks yet</td></tr>'}</tbody></table>
+      <div class="mini-list" style="margin-top:.75rem;border-left:3px solid #38bdf8">
+        <h4>Active Tuning <span class="meta" style="font-size:.72rem;color:#64748b">agent_tuning.json — applied on next scan</span></h4>
+        ${tuningRows ? `<table style="width:100%;font-size:.85rem"><tbody>${tuningRows}</tbody></table>`
+          : '<div class="meta" style="color:#64748b">No tuning params set — default thresholds in use.</div>'}
+      </div>`;
+
     const opt = d.optimizer || {};
     const findings = opt.findings || [];
     document.getElementById('optimizer').innerHTML = findings.length
@@ -1215,7 +1178,7 @@ async function refreshPerf(force) {
 
     // Manual trades
     const trs = document.getElementById('trade-rows');
-    trs.innerHTML = (d.trades || []).map(t => {
+    if (trs) trs.innerHTML = (d.trades || []).map(t => {
       const stCls = t.status === 'TARGET HIT' ? 'up' : t.status === 'STOPPED' ? 'down' : 'flat';
       const typeLbl = t.asset_type === 'OPTION'
         ? `${t.opt_type} ${t.strike} ${t.expiry || ''}` : `${t.kind} ${t.side}`;
@@ -1330,7 +1293,6 @@ def create_app(
     active_scanner=None,
     momentum_scanner=None,
     performance=None,
-    sim=None,
 ) -> FastAPI:
     """Build the FastAPI application bound to a running MarketWatch."""
     app = FastAPI(title="Groww Market Watch", version="1.0.0")
@@ -1695,85 +1657,6 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    # ------------------------------------------------------------------
-    # F&O simulation endpoint
-    # ------------------------------------------------------------------
-    @app.get("/api/sim")
-    async def sim_state() -> dict:
-        if sim is None:
-            raise HTTPException(status_code=503, detail="Sim not available")
-        from analyzer import atr, classify, opening_range, rvol, session_vwap
-
-        feed, trader = sim["feed"], sim["trader"]
-        from datetime import datetime as _dt
-        from zoneinfo import ZoneInfo as _ZI
-        base_ts = int(_dt.now(_ZI("Asia/Kolkata")).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        data = {}
-        for kind in ("FUT", "CE", "PE"):
-            bars = feed.candles(kind, 5, 78)
-            candles = [
-                {"time": base_ts + int(b["time"]) * 60, "open": b["open"], "high": b["high"],
-                 "low": b["low"], "close": b["close"]} for b in bars
-            ]
-            data[kind] = {
-                "candles": candles,
-                "vwap": session_vwap(bars),
-                "orh": opening_range(bars)[0],
-                "orl": opening_range(bars)[1],
-                "markers": [],
-            }
-
-        fut, ce, pe = data["FUT"]["candles"], data["CE"]["candles"], data["PE"]["candles"]
-        # rebuild bar dicts for analyzer (needs volume/oi)
-        fb = feed.candles("FUT", 5, 78); cb = feed.candles("CE", 5, 78); pb = feed.candles("PE", 5, 78)
-        verdict = classify(fb, cb, pb)
-
-        # paper-trade engine
-        spot = feed.snapshot()
-        ce_px = spot["prices"]["CE"]; pe_px = spot["prices"]["PE"]
-        fut_invalid = bool(fut) and abs(fut[-1]["close"] - fut[-1]["open"]) > 0 and False
-        opt_vwap_ce = data["CE"]["vwap"]; opt_vwap_pe = data["PE"]["vwap"]
-
-        entered = trader.try_enter(verdict["state"], "CE", ce_px, spot["atm_strike"])
-        if not entered:
-            entered = trader.try_enter(verdict["state"], "PE", pe_px, spot["atm_strike"])
-
-        # exits
-        if trader.position:
-            side = trader.position["side"]
-            px = ce_px if side == "CE" else pe_px
-            vwap = opt_vwap_ce if side == "CE" else opt_vwap_pe
-            candles_side = ce if side == "CE" else pe
-            opt_break = bool(vwap and candles_side and candles_side[-1]["close"] < vwap)
-            last = trader.try_exit(side, px, fut_invalid=fut_invalid, opt_vwap_break=opt_break)
-            if trader.position:
-                trader.position["last"] = px
-                trader.position["unreal_pnl"] = round((px - trader.position["entry"]) * trader.position["qty"], 2)
-
-        # markers on option charts from ledger + current entry
-        for t in trader.ledger[-10:]:
-            mk = {"time": int(t.get("entry_time", 0)) % 86400 // 60 + 0, "position": "belowBar",
-                  "color": "#4ade80" if t.get("pnl_points", 0) > 0 else "#f87171",
-                  "shape": "arrowUp" if t["side"] == "CE" else "arrowDown", "text": t["side"]}
-            # place at nearest candle time
-            series = data[t["side"]]["candles"]
-            if series:
-                mk["time"] = series[min(len(series)-1, max(0, len(series)-1))]["time"]
-                data[t["side"]]["markers"].append(mk)
-        if trader.position:
-            series = data[trader.position["side"]]["candles"]
-            if series:
-                data[trader.position["side"]]["markers"].append({
-                    "time": series[-1]["time"], "position": "belowBar", "color": "#fbbf24",
-                    "shape": "circle", "text": "OPEN"})
-
-        telemetry = trader.summary()
-        telemetry["state"] = verdict["state"]
-        telemetry["detail"] = verdict["detail"]
-        return {"atm_strike": spot["atm_strike"], "spot": spot["spot"],
-                "ce_px": ce_px, "pe_px": pe_px, "fut_px": spot["prices"].get("FUT"),
-                **{k: data[k] for k in ("FUT", "CE", "PE")}, "telemetry": telemetry}
-
     return app
 
 
@@ -1843,32 +1726,9 @@ def run_web(
         logger.info("Scanners disabled for data_source=%s.", settings.data_source)
         performance = None
 
-    # F&O intraday simulation engine (mock feed)
-    sim = None
-    if settings.data_source in {"yahoo", "demo"}:
-        try:
-            import yfinance as yf
-            seed = float(yf.Ticker("^NSEI").fast_info.last_price)
-        except Exception:
-            seed = 25000.0
-        from data_feed import SimFeed
-        from simulator import PaperTrader
-
-        feed = SimFeed(spot_seed=seed)
-        trader = PaperTrader()
-
-        def _tick_loop() -> None:
-            import time as _t
-            while True:
-                feed.tick()
-                _t.sleep(0.4)
-
-        threading.Thread(target=_tick_loop, daemon=True).start()
-        sim = {"feed": feed, "trader": trader, "markers": []}
-
     app = create_app(
         watch, settings, scanner=scanner, active_scanner=active_scanner,
-        momentum_scanner=momentum_scanner, performance=performance, sim=sim,
+        momentum_scanner=momentum_scanner, performance=performance,
     )
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")

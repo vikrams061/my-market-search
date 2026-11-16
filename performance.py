@@ -18,8 +18,11 @@ from datetime import date
 from typing import Any, Optional
 
 PICK_HISTORY_FILE = "pick_history.json"
+OUTCOMES_FILE = "pick_outcomes.json"
+TUNING_FILE = "agent_tuning.json"
 TRADES_FILE = "manual_trades.json"
 CACHE_TTL_SECONDS = 120  # refresh prices every 2 min; UI polls every 30s
+OUTCOME_HORIZONS = (0, 1)  # T+0 = pick-day close, T+1 = next trading day close
 
 
 class ManualTradeTracker:
@@ -221,6 +224,12 @@ class PerformanceAgent:
 
     # ------------------------------------------------------------------
     def _build_report(self) -> dict:
+        # score matured picks into pick_outcomes.json once the market is closed
+        if self._market_closed():
+            try:
+                self.score_pending()
+            except Exception as exc:
+                self._logger.warning("Outcome scoring failed: %s", exc)
         try:
             history = json.loads(open(PICK_HISTORY_FILE, encoding="utf-8").read())
         except Exception:
@@ -246,6 +255,7 @@ class PerformanceAgent:
                 ret = round(raw if h["side"] == "bullish" else -raw, 2)
             rows.append({
                 "date": h.get("date"),
+                "time": h.get("time"),
                 "source": h.get("source"),
                 "side": h.get("side"),
                 "symbol": h.get("symbol"),
@@ -256,13 +266,163 @@ class PerformanceAgent:
             })
 
         stats = self._stats(rows)
+        outcomes = self._outcome_rows()
+        try:
+            tuning = json.loads(open(TUNING_FILE, encoding="utf-8").read())
+        except Exception:
+            tuning = {}
         return {
             "generated_at": time.time(),
             "total_picks": len(rows),
             "stats": stats,
+            "tuning": tuning,
+            "outcome_stats": self._outcome_stats(outcomes),
+            "outcomes": sorted(outcomes, key=lambda r: r.get("exit_date") or "", reverse=True)[:50],
             "rows": sorted(rows, key=lambda r: r.get("date") or "", reverse=True)[:40],
             "trades": trades,
         }
+
+    # ------------------------------------------------------------------
+    # Fixed-horizon outcome scoring (append-only pick_outcomes.json)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_outcomes() -> list[dict]:
+        try:
+            return json.loads(open(OUTCOMES_FILE, encoding="utf-8").read())
+        except Exception:
+            return []
+
+    @staticmethod
+    def _save_outcomes(rows: list[dict]) -> None:
+        with open(OUTCOMES_FILE, "w", encoding="utf-8") as f:
+            json.dump(rows[-2000:], f, indent=2)
+
+    @staticmethod
+    def _outcome_rows() -> list[dict]:
+        try:
+            return json.loads(open(OUTCOMES_FILE, encoding="utf-8").read())
+        except Exception:
+            return []
+
+    def score_pending(self) -> int:
+        """Score unscored picks at fixed horizons; appends to pick_outcomes.json.
+
+        A horizon is only scored once its target trading day is fully closed
+        (past date, or today after market close) so intraday bars never leak in.
+        Returns the number of new outcome rows written.
+        """
+        try:
+            history = json.loads(open(PICK_HISTORY_FILE, encoding="utf-8").read())
+        except Exception:
+            return 0
+        outcomes = self._load_outcomes()
+        done = {
+            (o.get("date"), o.get("source"), o.get("side"), o.get("symbol"), o.get("horizon"))
+            for o in outcomes
+        }
+        pending = [
+            h for h in history
+            if h.get("entry_price") and h.get("date")
+            and any((h["date"], h.get("source"), h.get("side"), h.get("symbol"), hz) not in done
+                    for hz in OUTCOME_HORIZONS)
+        ]
+        if not pending:
+            return 0
+
+        today = date.today()
+        market_closed = self._market_closed()
+        idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^CNXFIN", "MIDCPNIFT": "^CNXMID"}
+        new_rows: list[dict] = []
+
+        by_symbol: dict[str, list[dict]] = {}
+        for h in pending:
+            by_symbol.setdefault(h["symbol"], []).append(h)
+
+        import yfinance as yf
+
+        def fetch(sym: str):
+            try:
+                ys = idx_map.get(sym, f"{sym}.NS")
+                df = yf.Ticker(ys).history(period="6mo", interval="1d", auto_adjust=False)
+                if df is None or df.empty:
+                    return sym, None
+                df.index = df.index.tz_localize(None) if df.index.tz is not None else df.index
+                return sym, df
+            except Exception:
+                return sym, None
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            frames = dict(pool.map(fetch, by_symbol.keys()))
+
+        for sym, picks in by_symbol.items():
+            df = frames.get(sym)
+            if df is None or df.empty:
+                continue
+            dates = [d.date() for d in df.index]
+            closes = [float(c) for c in df["Close"]]
+            for h in picks:
+                try:
+                    pick_date = date.fromisoformat(h["date"])
+                except Exception:
+                    continue
+                if pick_date not in dates:
+                    continue
+                pos = dates.index(pick_date)
+                entry = float(h["entry_price"])
+                bullish = h.get("side") == "bullish"
+                for hz in OUTCOME_HORIZONS:
+                    key = (h["date"], h.get("source"), h.get("side"), sym, hz)
+                    if key in done:
+                        continue
+                    tpos = pos + hz
+                    if tpos >= len(dates):
+                        continue
+                    target_date = dates[tpos]
+                    # only score fully-closed sessions
+                    if target_date > today or (target_date == today and not market_closed):
+                        continue
+                    raw = (closes[tpos] / entry - 1) * 100
+                    ret = round(raw if bullish else -raw, 2)
+                    new_rows.append({
+                        "date": h["date"], "time": h.get("time"), "source": h.get("source"),
+                        "side": h.get("side"), "symbol": sym,
+                        "entry": round(entry, 2), "horizon": hz,
+                        "exit_date": target_date.isoformat(),
+                        "exit_price": round(closes[tpos], 2),
+                        "return_pct": ret,
+                    })
+                    done.add(key)
+
+        if new_rows:
+            outcomes.extend(new_rows)
+            self._save_outcomes(outcomes)
+            self._logger.info("Scored %d pick outcomes.", len(new_rows))
+        return len(new_rows)
+
+    @staticmethod
+    def _outcome_stats(rows: list[dict]) -> dict:
+        """Per-source stats at each horizon from scored outcomes."""
+        out: dict[str, Any] = {}
+        for hz in OUTCOME_HORIZONS:
+            sub = [r for r in rows if r.get("horizon") == hz and r.get("return_pct") is not None]
+            if not sub:
+                continue
+            by_src: dict[str, list[float]] = {}
+            for r in sub:
+                by_src.setdefault(r.get("source") or "?", []).append(r["return_pct"])
+            out[f"T+{hz}"] = {
+                "n": len(sub),
+                "avg_return": round(sum(r["return_pct"] for r in sub) / len(sub), 2),
+                "win_rate": round(100 * sum(1 for r in sub if r["return_pct"] > 0) / len(sub), 1),
+                "by_source": {
+                    s: {
+                        "n": len(v),
+                        "avg": round(sum(v) / len(v), 2),
+                        "win_rate": round(100 * sum(1 for x in v if x > 0) / len(v), 1),
+                    } for s, v in sorted(by_src.items())
+                },
+            }
+        return out
 
     # ------------------------------------------------------------------
     def _fetch_prices(self, history: list[dict]) -> dict[str, Optional[float]]:
@@ -291,8 +451,25 @@ class PerformanceAgent:
     # ------------------------------------------------------------------
     # Meta-analysis: findings + suggestions to improve agent pick quality
     # ------------------------------------------------------------------
+    @staticmethod
+    def _market_closed() -> bool:
+        """True outside NSE equity hours (9:15–15:30 IST, Mon–Fri)."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        if now.weekday() >= 5:
+            return True
+        mins = now.hour * 60 + now.minute
+        return mins < 9 * 60 + 15 or mins >= 15 * 60 + 30
+
     def suggestions(self) -> dict:
         """Analyse performance rows and produce improvement recommendations."""
+        if not self._market_closed():
+            return {
+                "findings": ["Market is still open — optimizer analysis runs after 15:30 IST."],
+                "tuning": {},
+            }
         report = self.report()
         rows = [r for r in report.get("rows", []) if r.get("return_pct") is not None]
         findings: list[str] = []
@@ -371,11 +548,18 @@ class PerformanceAgent:
                 )
                 tuning[f"{src}_liquidity_filter"] = True
 
-        # persist tuning so scanners pick it up on the next scan
+        # persist tuning so scanners pick it up on the next scan.
+        # Merge with existing file: agent-managed keys are updated, manual
+        # keys the agent doesn't touch are preserved.
         if tuning:
             try:
-                with open("agent_tuning.json", "w", encoding="utf-8") as f:
-                    json.dump(tuning, f, indent=2)
+                try:
+                    existing = json.loads(open(TUNING_FILE, encoding="utf-8").read())
+                except Exception:
+                    existing = {}
+                merged = {**existing, **tuning}
+                with open(TUNING_FILE, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, indent=2)
                 findings.append("Tuning applied → agent_tuning.json (takes effect on next scan/rescan).")
             except Exception as exc:
                 findings.append(f"Could not persist tuning: {exc}")
