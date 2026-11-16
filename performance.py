@@ -252,7 +252,9 @@ class PerformanceAgent:
             ret = None
             if cur and entry:
                 raw = (cur / entry - 1) * 100
-                ret = round(raw if h["side"] == "bullish" else -raw, 2)
+                side = h.get("side")
+                # neutral (Iron Condor) profits in flat markets -> penalize |move|
+                ret = round(-abs(raw) if side == "neutral" else (raw if side == "bullish" else -raw), 2)
             rows.append({
                 "date": h.get("date"),
                 "time": h.get("time"),
@@ -369,7 +371,7 @@ class PerformanceAgent:
                     continue
                 pos = dates.index(pick_date)
                 entry = float(h["entry_price"])
-                bullish = h.get("side") == "bullish"
+                side = h.get("side")
                 for hz in OUTCOME_HORIZONS:
                     key = (h["date"], h.get("source"), h.get("side"), sym, hz)
                     if key in done:
@@ -382,7 +384,7 @@ class PerformanceAgent:
                     if target_date > today or (target_date == today and not market_closed):
                         continue
                     raw = (closes[tpos] / entry - 1) * 100
-                    ret = round(raw if bullish else -raw, 2)
+                    ret = round(-abs(raw) if side == "neutral" else (raw if side == "bullish" else -raw), 2)
                     new_rows.append({
                         "date": h["date"], "time": h.get("time"), "source": h.get("source"),
                         "side": h.get("side"), "symbol": sym,

@@ -1120,6 +1120,7 @@ async function refreshPerf(force) {
       {key: 'active',  name: 'Active Stocks',     desc: 'Momentum scan of ~100 liquid NSE large/mid caps.', src: 'active'},
       {key: 'momentum',name: 'Momentum Radar',    desc: 'Broad ~180-symbol multi-cap scan (small/mid/large) with trend bias + confidence.', src: 'momentum'},
       {key: 'credit',  name: 'Credit Desk',       desc: 'Intraday defined-risk credit strategies (spreads/condors) with regime, VIX & time-window filters.', src: 'credit'},
+      {key: 'credit_tracker', name: 'Credit Tracker', desc: 'Strike-aware tracking of credit spreads & iron condors — records short/long strikes for outcome scoring.', src: 'credit_tracker'},
     ];
     const bySrc = stats.by_source || {};
     document.getElementById('agent-cards').innerHTML = AGENTS.map(a => {
