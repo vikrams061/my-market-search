@@ -204,20 +204,38 @@ INDEX_HTML = """<!DOCTYPE html>
     <div class="controls" style="margin-top:1rem">
       <input id="stk-sym" placeholder="STOCK SYMBOL" maxlength="20" />
       <select id="stk-kind"><option value="EQ">Stock</option><option value="INDEX">Index</option></select>
-      <button onclick="loadStockChart()">Load Chart</button>
+      <button onclick="loadStockChart('stk')">Load Chart</button>
       <span style="margin-left:.75rem">
-        <button class="scan-btn tf-btn active" data-stf="5" onclick="setStf(5,this)">5m</button>
-        <button class="scan-btn tf-btn" data-stf="15" onclick="setStf(15,this)">15m</button>
-        <button class="scan-btn tf-btn" data-stf="60" onclick="setStf(60,this)">1h</button>
-        <button class="scan-btn tf-btn" data-stf="D" onclick="setStf('D',this)">D</button>
-        <button class="scan-btn" onclick="zoomChart(stkChart,1.4)">+</button>
-        <button class="scan-btn" onclick="zoomChart(stkChart,0.7)">&minus;</button>
-        <button class="scan-btn" onclick="stkChart&&stkChart.timeScale().fitContent()">Reset</button>
+        <button class="scan-btn tf-btn active" data-stf="5" onclick="setStf('stk',5,this)">5m</button>
+        <button class="scan-btn tf-btn" data-stf="15" onclick="setStf('stk',15,this)">15m</button>
+        <button class="scan-btn tf-btn" data-stf="60" onclick="setStf('stk',60,this)">1h</button>
+        <button class="scan-btn tf-btn" data-stf="D" onclick="setStf('stk','D',this)">D</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk.chart,1.4)">+</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk.chart,0.7)">&minus;</button>
+        <button class="scan-btn" onclick="stockCharts.stk.chart&&stockCharts.stk.chart.timeScale().fitContent()">Reset</button>
         <button class="scan-btn tf-btn active" id="tf-candle-s" onclick="setSeriesType('stk','candles')">Candles</button>
         <button class="scan-btn tf-btn" id="tf-line-s" onclick="setSeriesType('stk','line')">Line</button>
       </span>
     </div>
     <div id="stk-chart" style="height:320px"></div>
+
+    <div class="controls" style="margin-top:1rem">
+      <input id="stk2-sym" placeholder="STOCK SYMBOL 2" maxlength="20" />
+      <select id="stk2-kind"><option value="EQ">Stock</option><option value="INDEX">Index</option></select>
+      <button onclick="loadStockChart('stk2')">Load Chart</button>
+      <span style="margin-left:.75rem">
+        <button class="scan-btn tf-btn active" data-stf="5" onclick="setStf('stk2',5,this)">5m</button>
+        <button class="scan-btn tf-btn" data-stf="15" onclick="setStf('stk2',15,this)">15m</button>
+        <button class="scan-btn tf-btn" data-stf="60" onclick="setStf('stk2',60,this)">1h</button>
+        <button class="scan-btn tf-btn" data-stf="D" onclick="setStf('stk2','D',this)">D</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk2.chart,1.4)">+</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk2.chart,0.7)">&minus;</button>
+        <button class="scan-btn" onclick="stockCharts.stk2.chart&&stockCharts.stk2.chart.timeScale().fitContent()">Reset</button>
+        <button class="scan-btn tf-btn active" id="tf-candle-s2" onclick="setSeriesType('stk2','candles')">Candles</button>
+        <button class="scan-btn tf-btn" id="tf-line-s2" onclick="setSeriesType('stk2','line')">Line</button>
+      </span>
+    </div>
+    <div id="stk2-chart" style="height:320px"></div>
   </div>
 
   <div class="analyst">
@@ -381,7 +399,9 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div class="tab-pane" id="pane-fno">
   <div class="analyst">
-    <h2>F&amp;O Intraday Simulation <span class="meta" style="font-size:.75rem;color:#64748b">SIMULATED DATA — mock feed</span></h2>
+    <h2>F&amp;O Intraday Simulation <span class="meta" style="font-size:.75rem;color:#64748b">SIMULATED DATA — mock feed</span>
+      <button class="scan-btn" onclick="refreshSim()" style="margin-left:.75rem">Refresh</button>
+    </h2>
     <div class="meta" id="sim-telemetry" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
       <div>
@@ -390,11 +410,11 @@ INDEX_HTML = """<!DOCTYPE html>
       </div>
       <div style="display:flex;flex-direction:column;gap:.75rem">
         <div>
-          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Call (CE)</div>
+          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Call (CE) <b id="sim-ce-px" style="color:#4ade80">—</b></div>
           <div id="sim-ce" style="height:140px"></div>
         </div>
         <div>
-          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Put (PE)</div>
+          <div class="meta" style="font-size:.78rem;color:#cbd5e1;margin-bottom:.25rem">ATM Put (PE) <b id="sim-pe-px" style="color:#f87171">—</b></div>
           <div id="sim-pe" style="height:140px"></div>
         </div>
       </div>
@@ -664,11 +684,13 @@ async function refreshSim() {
       ch.timeScale().fitContent();
     }
     const t = d.telemetry || {};
+    document.getElementById('sim-ce-px').textContent = '₹' + (d.ce_px ?? '—');
+    document.getElementById('sim-pe-px').textContent = '₹' + (d.pe_px ?? '—');
     document.getElementById('sim-telemetry').innerHTML =
-      `ATM Strike <b>${d.atm_strike}</b> · State <b class="${t.state==='BUY_CALL'||t.state==='BUY_PUT'?'up':t.state==='THETA_DECAY'||t.state==='EXHAUSTION'?'down':'flat'}">${t.state}</b> · ${t.detail||''} · Trades ${t.trades_today||0}/3`;
+      `Spot <b>${d.spot ?? '—'}</b> · ATM Strike <b>${d.atm_strike}</b> · State <b class="${t.state==='BUY_CALL'||t.state==='BUY_PUT'?'up':t.state==='THETA_DECAY'||t.state==='EXHAUSTION'?'down':'flat'}">${t.state}</b> · ${t.detail||''} · Trades ${t.trades_today||0}/3`;
     const led = (t.ledger||[]).map(x =>
-      `<div>${x.side} ${x.strike} @ ${x.entry} → ${x.exit ?? '—'} | <b class="${(x.pnl_inr||0)>=0?'up':'down'}">₹${x.pnl_inr ?? '—'}</b> ${x.exit_reason||''}</div>`).join('');
-    const act = t.active ? `<div style="color:#fbbf24">OPEN ${t.active.side} ${t.active.strike} @ ${t.active.entry} → now ${t.active.last||'—'}</div>` : '';
+      `<div>${x.side} ${x.strike} @ ${x.entry} → ${x.exit ?? '—'} | SL ${x.sl ?? '—'} · Tgt ${x.target ?? '—'} | <b class="${(x.pnl_inr||0)>=0?'up':'down'}">₹${x.pnl_inr ?? '—'}</b> ${x.exit_reason||''}</div>`).join('');
+    const act = t.active ? `<div style="color:#fbbf24">OPEN ${t.active.side} ${t.active.strike} @ ${t.active.entry} → now ${t.active.last||'—'} | SL ${t.active.sl ?? '—'} · Tgt ${t.active.target ?? '—'}</div>` : '';
     document.getElementById('sim-ledger').innerHTML = act + led || '<span style="color:#64748b">No trades yet</span>';
   } catch (e) {}
 }
@@ -677,7 +699,7 @@ setInterval(refreshSim, 3000);
 
 // ---- NIFTY live chart (candles built from market-watch ticks) -------------
 // breakout target lines (SL / T1 / T2 / T3) per chart
-const targetLines = {nifty: [], stk: []};
+const targetLines = {nifty: [], stk: [], stk2: []};
 function clearTargetLines(key, series) {
   (targetLines[key] || []).forEach(l => { try { series.removePriceLine(l); } catch(e){} });
   targetLines[key] = [];
@@ -714,15 +736,16 @@ function timeGateOk(t, volRatio) {
 }
 
 // candles vs line series toggle (both series stay loaded; visibility toggles)
-const chartSeries = {nifty: {}, stk: {}};
+const chartSeries = {nifty: {}, stk: {}, stk2: {}};
 function setSeriesType(key, type) {
   chartSeries[key].type = type;
   const s = chartSeries[key];
   if (!s || !s.candle) return;
   if (s.candle) s.candle.applyOptions({visible: type === 'candles'});
   if (s.line) s.line.applyOptions({visible: type === 'line'});
-  document.getElementById('tf-candle-' + (key === 'nifty' ? 'n' : 's')).classList.toggle('active', type === 'candles');
-  document.getElementById('tf-line-' + (key === 'nifty' ? 'n' : 's')).classList.toggle('active', type === 'line');
+  const suf = {nifty: 'n', stk: 's', stk2: 's2'}[key] || key;
+  document.getElementById('tf-candle-' + suf).classList.toggle('active', type === 'candles');
+  document.getElementById('tf-line-' + suf).classList.toggle('active', type === 'line');
 }
 
 function zoomChart(chart, factor) {
@@ -852,63 +875,70 @@ async function refreshNiftyChart() {
 }
 initNiftyChart();
 
-// ---- Stock chart (any symbol, candlesticks + B/S markers) ------------------
-let stkChart = null, stkSeries = null, stkOrh = null, stkOrl = null, stkTf = '5', stkSymbol = '', stkFitted = false, stkKind = 'EQ';
-function setStf(tf, btn) {
-  stkTf = tf;
-  stkFitted = false;
-  document.querySelectorAll('[data-stf]').forEach(b => b.classList.remove('active'));
+// ---- Stock charts (any symbol, candlesticks + B/S markers) ----------------
+const stockCharts = {
+  stk:  {chart: null, series: null, orh: null, orl: null, tf: '5', symbol: '', kind: 'EQ', fitted: false},
+  stk2: {chart: null, series: null, orh: null, orl: null, tf: '5', symbol: '', kind: 'EQ', fitted: false},
+};
+function setStf(key, tf, btn) {
+  const st = stockCharts[key];
+  st.tf = tf;
+  st.fitted = false;
+  btn.parentElement.querySelectorAll('[data-stf]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  if (stkSymbol) loadStockChart();
+  if (st.symbol) refreshStockChart(key);
 }
-function loadStockChart() {
-  const sym = document.getElementById('stk-sym').value.trim().toUpperCase();
-  const kind = document.getElementById('stk-kind').value;
+function loadStockChart(key) {
+  const p = key === 'stk2' ? '2' : '';
+  const sym = document.getElementById('stk' + p + '-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('stk' + p + '-kind').value;
   if (!sym) return;
-  stkSymbol = sym; stkKind = kind;
-  refreshStockChart();
+  const st = stockCharts[key];
+  st.symbol = sym; st.kind = kind;
+  refreshStockChart(key);
 }
-async function refreshStockChart() {
-  if (!stkSymbol) return;
-  if (!stkSeries) {
-    if (typeof LightweightCharts === 'undefined') { setTimeout(refreshStockChart, 1000); return; }
-    stkChart = LightweightCharts.createChart(document.getElementById('stk-chart'),
+async function refreshStockChart(key) {
+  const st = stockCharts[key];
+  if (!st || !st.symbol) return;
+  if (!st.series) {
+    if (typeof LightweightCharts === 'undefined') { setTimeout(() => refreshStockChart(key), 1000); return; }
+    const elId = key === 'stk2' ? 'stk2-chart' : 'stk-chart';
+    st.chart = LightweightCharts.createChart(document.getElementById(elId),
       {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
        grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
        timeScale:{borderColor:'#334155',timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#334155'}});
-    stkSeries = stkChart.addCandlestickSeries({
+    st.series = st.chart.addCandlestickSeries({
       upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
       borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
-    stkOrh = stkSeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
-    stkOrl = stkSeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
-    const stkLine = stkChart.addLineSeries({color:'#818cf8',lineWidth:2,visible:false});
-    chartSeries.stk = {candle: stkSeries, line: stkLine, type: 'candles'};
+    st.orh = st.series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
+    st.orl = st.series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
+    const stkLine = st.chart.addLineSeries({color:'#818cf8',lineWidth:2,visible:false});
+    chartSeries[key] = {candle: st.series, line: stkLine, type: 'candles'};
   }
   try {
-    const iv = stkTf === 'D' ? '1d' : stkTf + 'm';
-    const d = await (await fetch(`/api/chart?symbol=${stkSymbol}&kind=${kind}&interval=${iv}`)).json();
+    const iv = st.tf === 'D' ? '1d' : st.tf + 'm';
+    const d = await (await fetch(`/api/chart?symbol=${st.symbol}&kind=${st.kind}&interval=${iv}`)).json();
     if (d.candles && d.candles.length) {
       const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
       d.candles = d.candles.filter(c => c.time >= cutoff);
-      stkSeries.setData(d.candles);
-      if (chartSeries.stk && chartSeries.stk.line)
-        chartSeries.stk.line.setData(d.candles.map(c => ({time: c.time, value: c.close})));
-      const isDailyS = stkTf === 'D';
-      stkOrh.applyOptions({visible: !isDailyS});
-      stkOrl.applyOptions({visible: !isDailyS});
-      if (d.orh != null && !isDailyS) stkOrh.applyOptions({price: d.orh});
-      if (d.orl != null && !isDailyS) stkOrl.applyOptions({price: d.orl});
+      st.series.setData(d.candles);
+      if (chartSeries[key] && chartSeries[key].line)
+        chartSeries[key].line.setData(d.candles.map(c => ({time: c.time, value: c.close})));
+      const isDailyS = st.tf === 'D';
+      st.orh.applyOptions({visible: !isDailyS});
+      st.orl.applyOptions({visible: !isDailyS});
+      if (d.orh != null && !isDailyS) st.orh.applyOptions({price: d.orh});
+      if (d.orl != null && !isDailyS) st.orl.applyOptions({price: d.orl});
       const orbMap = {};
       (d.orb_markers || []).forEach(m => { orbMap[m.time] = m.side; });
       const avgVolS = d.candles.slice(-21, -1).reduce((a, c) => a + (c.volume || 0), 0)
         / Math.max(1, Math.min(20, d.candles.length - 1));
-      const tfMinBaseS = stkTf === '60' ? 60 : stkTf === 'D' ? 1 : parseInt(stkTf) || 5;
-      const avgRateBaseS = avgVolS / tfMinBaseS;
+      const tfMinBaseS = st.tf === '60' ? 60 : st.tf === 'D' ? 1 : parseInt(st.tf) || 5;
       let lastBullS = 0, lastBearS = 0, lastBrkS = null;
       const orSizeS = (d.orh != null && d.orl != null) ? d.orh - d.orl : 0;
       const dailyOrS = d.daily_or || {};
       const dayKeyS = t => new Date(t * 1000).toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
-      stkSeries.setMarkers(d.candles.slice(-120).map((c, i, arr) => {
+      st.series.setMarkers(d.candles.slice(-120).map((c, i, arr) => {
         const orb = orbMap[c.time];
         if (orb) {
           const isBuy = orb === 'B';
@@ -923,7 +953,7 @@ async function refreshStockChart() {
         const range = c.high - c.low || 1;
         const body = Math.abs(c.close - c.open);
         const strongBody = body > range * 0.4;
-        const volumeValidS = stkKind === 'INDEX' || avgVolS <= 0
+        const volumeValidS = st.kind === 'INDEX' || avgVolS <= 0
           || (c.volume || 0) / tfMinBaseS > (avgVolS / tfMinBaseS) * 1.2;
         const vwapBullS = c.vwap != null ? c.close > c.vwap : true;
         const vwapBearS = c.vwap != null ? c.close < c.vwap : true;
@@ -959,14 +989,14 @@ async function refreshStockChart() {
         const dorBS = dailyOrS[dayKeyS(lastBrkS.t)] || {};
         const activeOrhS = dorBS.orh != null ? dorBS.orh : d.orh;
         const activeOrlS = dorBS.orl != null ? dorBS.orl : d.orl;
-        if (slHitS) clearTargetLines('stk', stkSeries);
-        else plotBreakoutTargets('stk', stkSeries, lastBrkS.price, lastBrkS.isBuy, orSizeForS(lastBrkS.t), slPxS, activeOrhS, activeOrlS);
-      } else clearTargetLines('stk', stkSeries);
-      if (!stkFitted) { stkChart.timeScale().fitContent(); stkFitted = true; }
+        if (slHitS) clearTargetLines(key, st.series);
+        else plotBreakoutTargets(key, st.series, lastBrkS.price, lastBrkS.isBuy, orSizeForS(lastBrkS.t), slPxS, activeOrhS, activeOrlS);
+      } else clearTargetLines(key, st.series);
+      if (!st.fitted) { st.chart.timeScale().fitContent(); st.fitted = true; }
     }
   } catch (e) {}
 }
-setInterval(refreshStockChart, 60000);
+setInterval(() => { refreshStockChart('stk'); refreshStockChart('stk2'); }, 60000);
 
 // ---- Trend & momentum quick check ----------------------------------------
 async function checkSymbol() {
@@ -1740,6 +1770,7 @@ def create_app(
         telemetry["state"] = verdict["state"]
         telemetry["detail"] = verdict["detail"]
         return {"atm_strike": spot["atm_strike"], "spot": spot["spot"],
+                "ce_px": ce_px, "pe_px": pe_px, "fut_px": spot["prices"].get("FUT"),
                 **{k: data[k] for k in ("FUT", "CE", "PE")}, "telemetry": telemetry}
 
     return app

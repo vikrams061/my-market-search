@@ -196,6 +196,7 @@ def analyze_credit(symbol: str, kind: str, logger: logging.Logger) -> str:
         step = 50 if p < 1000 else 100
         return int(round(p / step) * step)
 
+    short_k = long_k = None
     if strat == "Bull Put Spread":
         short_k = _k((orl or vwap or price) * 0.997)   # below ORL/support
         long_k = _k(short_k - price * 0.03)           # ~3% tail hedge
