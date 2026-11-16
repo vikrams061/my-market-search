@@ -1382,9 +1382,10 @@ def create_app(
 
             candles = []
             for ts, r in df.iterrows():
-                # epoch seconds (UTC); IST conversion above is only for grouping
+                # lightweight-charts v4 renders UTCTimestamp as UTC, so store the
+                # IST wall-clock as a UTC epoch to display IST times on the axis
                 candles.append({
-                    "time": int(ts.timestamp()), "open": round(float(r["Open"]), 2),
+                    "time": int(ts.tz_localize(None).timestamp()), "open": round(float(r["Open"]), 2),
                     "high": round(float(r["High"]), 2), "low": round(float(r["Low"]), 2),
                     "close": round(float(r["Close"]), 2),
                     "volume": int(r["Volume"]) if not pd.isna(r["Volume"]) else 0})
@@ -1474,12 +1475,12 @@ def create_app(
                             if (not bull_fired and prev["Close"] <= orh
                                     and curr["Close"] > orh
                                     and vol_ok):
-                                orb_markers.append({"time": int(curr.name.timestamp()), "side": "B"})
+                                orb_markers.append({"time": int(curr.name.tz_localize(None).timestamp()), "side": "B"})
                                 bull_fired = True
                             elif (not bear_fired and prev["Close"] >= orl
                                     and curr["Close"] < orl
                                     and vol_ok):
-                                orb_markers.append({"time": int(curr.name.timestamp()), "side": "S"})
+                                orb_markers.append({"time": int(curr.name.tz_localize(None).timestamp()), "side": "S"})
                                 bear_fired = True
             except Exception:
                 pass
