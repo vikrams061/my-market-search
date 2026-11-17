@@ -1,23 +1,21 @@
 """Chart Reader Agent — interactive candlestick-pattern screener for NSE.
 
-Guides the user through a 4-step menu (universe / timeframe / pattern
-group / confidence threshold), scans completed candles only, scores each
-setup 0-100 with the weighted model (geometry 45%, trend+levels 35%,
-volume 20%), and returns a structured markdown report.
-
-Pattern rules are mathematical OHLC approximations of the Groww
-candlestick-pattern reference — not exhaustive; zero matches are reported
-honestly rather than forced.
+4-step menu (universe / timeframe / pattern group / confidence), scans
+completed candles only, scores with geometry 65% + time-of-day-normalized
+volume 35%, strict trend-location gating, and returns a markdown report.
 """
 
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
+from typing import Literal, Optional
+
+import pandas as pd
 
 logger = logging.getLogger("chart_reader")
+
+BiasType = Literal["bullish", "bearish", "neutral"]
 
 # ---------------------------------------------------------------------------
 # Phase 1 — selection menu
@@ -25,10 +23,8 @@ logger = logging.getLogger("chart_reader")
 
 UNIVERSES = {
     "1A": ("Nifty 50", "nifty50"),
-    "1B": ("Nifty ~100 (50 + active large/mid)", "active"),
-    "1C": ("Broad multi-cap (~180)", "broad"),
-    "1D": ("Multicap (symbols_multicap.json)", "multicap"),
-    "1E": ("Smallcap (symbols_smallcap.json)", "smallcap"),
+    "1B": ("Small + Midcap (~81)", "smallcap"),
+    "1C": ("All Nifty (~100)", "active"),
 }
 
 TIMEFRAMES = {
@@ -38,275 +34,237 @@ TIMEFRAMES = {
     "2D": ("1d", "1d", "1y"),
 }
 
-PATTERN_GROUPS = {
-    "3A": "all",
-    "3B": "bullish",
-    "3C": "bearish",
-    "3D": "continuation",
-}
-
+PATTERN_GROUPS = {"3A": "all", "3B": "bullish", "3C": "bearish", "3D": "continuation"}
 THRESHOLDS = {"4A": 75.0, "4B": 80.0, "4C": 90.0}
 
-BULLISH_PATTERNS = {"hammer", "inverted_hammer", "bullish_engulfing",
-                    "piercing", "morning_star", "three_white_soldiers",
-                    "bullish_harami"}
-BEARISH_PATTERNS = {"shooting_star", "hanging_man", "bearish_engulfing",
-                    "dark_cloud", "evening_star", "three_black_crows",
-                    "bearish_harami"}
-NEUTRAL_PATTERNS = {"marubozu", "doji", "spinning_top", "rising_three",
-                    "falling_three"}
-
+BULLISH_PATTERNS = {"hammer", "inverted_hammer", "bullish_engulfing", "piercing_line",
+                    "morning_star", "three_white_soldiers", "bullish_harami",
+                    "tweezer_bottom", "rising_three"}
+BEARISH_PATTERNS = {"shooting_star", "hanging_man", "bearish_engulfing", "dark_cloud_cover",
+                    "evening_star", "three_black_crows", "bearish_harami",
+                    "tweezer_top", "falling_three"}
+NEUTRAL_PATTERNS = {"marubozu", "doji"}
 GROUP_MAP = {
     "all": BULLISH_PATTERNS | BEARISH_PATTERNS | NEUTRAL_PATTERNS,
     "bullish": BULLISH_PATTERNS,
     "bearish": BEARISH_PATTERNS,
-    "continuation": NEUTRAL_PATTERNS,
+    "continuation": NEUTRAL_PATTERNS | {"rising_three", "falling_three"},
 }
 
 MENU_TEXT = """**Chart Reader — setup menu** (reply e.g. `1B, 2B, 3B, 4B`)
 
-1. Universe: [1A] Nifty 50 · [1B] ~Nifty 100 · [1C] Broad · [1D] Broad · [1E] All · [1F] Multicap file · [1G] Smallcap file
+1. Universe: [1A] Nifty 50 · [1B] Small + Midcap · [1C] All Nifty (~100)
 2. Timeframe: [2A] 5m · [2B] 15m · [2C] 1h · [2D] 1d
 3. Patterns: [3A] All · [3B] Bullish reversal · [3C] Bearish reversal · [3D] Continuation/indecision
 4. Min confidence: [4A] >=75% · [4B] >=80% · [4C] >=90%"""
 
 
 # ---------------------------------------------------------------------------
-# Pattern detection — mathematical OHLC rules on completed candles
+# Core metrics (per spec)
 # ---------------------------------------------------------------------------
 
-def _rng(c):
-    return max(c["high"] - c["low"], 1e-9)
+@dataclass
+class PatternSignal:
+    ticker: str
+    pattern: str
+    bias: BiasType
+    confidence: float
+    timestamp: str
+    body_ratio: float
+    rel_vol_tod: float
 
 
-def _body(c):
-    return abs(c["close"] - c["open"])
+def candle_metrics(row: pd.Series) -> dict:
+    o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
+    rng = h - l
+    body = abs(c - o)
+    upper_wick = h - max(o, c)
+    lower_wick = min(o, c) - l
+    if rng <= 0:
+        return {"range": 0.0, "body": 0.0, "body_ratio": 0.0, "upper_ratio": 0.0,
+                "lower_ratio": 0.0, "is_bull": False, "is_bear": False}
+    return {"range": rng, "body": body, "body_ratio": body / rng,
+            "upper_ratio": upper_wick / rng, "lower_ratio": lower_wick / rng,
+            "is_bull": c > o, "is_bear": c < o}
 
 
-def _upper_wick(c):
-    return c["high"] - max(c["open"], c["close"])
+def get_trend_regime(close: float, ema20: float, vwap: float, prior_mean: float) -> str:
+    """Structural trend location — reversal patterns only fire at extremes."""
+    if close > ema20 and close >= vwap and close > prior_mean:
+        return "uptrend"
+    if close < ema20 and close <= vwap and close < prior_mean:
+        return "downtrend"
+    return "neutral"
 
 
-def _lower_wick(c):
-    return min(c["open"], c["close"]) - c["low"]
+def compute_tod_relative_volume(df: pd.DataFrame, lookback_days: int = 20) -> pd.Series:
+    """Volume vs the historical average at that exact time-of-day bucket."""
+    tod_bucket = pd.to_datetime(df["timestamp"]).dt.strftime("%H:%M")
+    tod_avg = df.groupby(tod_bucket)["volume"].transform(
+        lambda s: s.shift(1).rolling(lookback_days, min_periods=5).mean()
+    )
+    return (df["volume"] / tod_avg).fillna(1.0)
 
 
-def detect_patterns(candles: list[dict]) -> list[dict]:
-    """Return pattern hits on the last completed candle(s)."""
-    if len(candles) < 3:
+def _score_signal(ticker, pattern, bias, structural_quality, rel_vol_tod, timestamp) -> PatternSignal:
+    """Geometry 65% + time-of-day volume 35% — weak bodies can't reach 80% on volume alone."""
+    geom_score = min(1.0, max(0.0, (structural_quality - 0.45) / 0.45))
+    vol_score = min(1.0, max(0.0, (rel_vol_tod - 0.70) / 1.80))
+    raw_conf = (0.65 * geom_score + 0.35 * vol_score) * 100.0
+    return PatternSignal(
+        ticker=ticker, pattern=pattern, bias=bias,
+        confidence=round(min(98.0, raw_conf), 1), timestamp=timestamp,
+        body_ratio=round(structural_quality * 100.0, 1),
+        rel_vol_tod=round(rel_vol_tod, 2),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comprehensive classifier (completed candles only)
+# ---------------------------------------------------------------------------
+
+def classify_comprehensive_patterns(df: pd.DataFrame, ticker: str,
+                                    timeframe: str = "15m",
+                                    min_atr_mult: float = 0.50) -> list[PatternSignal]:
+    if len(df) < 25:
         return []
-    c, p1, p2 = candles[-1], candles[-2], candles[-3]
-    hits = []
-    rng, body = _rng(c), _body(c)
-    # decisive-body gate: rejects doji/spinning-top-like bars for patterns
-    # that require real directional conviction (engulfing, marubozu, stars,
-    # soldiers/crows, three-methods). Wick patterns (hammer etc.) exempt.
-    decisive = rng > 0 and (body / rng) >= 0.60
-    uw, lw = _upper_wick(c), _lower_wick(c)
-    bull = c["close"] > c["open"]
-    bear = c["close"] < c["open"]
 
-    # single-candle wick patterns — small body is the point, no decisive gate
-    if body <= rng * 0.1:
-        pass  # doji rejected — no edge
-    if lw >= body * 2 and uw <= body * 0.5 and bull:
-        hits.append(("hammer", "bullish", 0.85))
-    if uw >= body * 2 and lw <= body * 0.5 and bear:
-        hits.append(("shooting_star", "bearish", 0.85))
-    if lw >= body * 2 and uw <= body * 0.5 and bear:
-        hits.append(("hanging_man", "bearish", 0.7))
-    if uw >= body * 2 and lw <= body * 0.5 and bull:
-        hits.append(("inverted_hammer", "bullish", 0.7))
-    if decisive and body >= rng * 0.9:
-        hits.append(("marubozu", "bullish" if bull else "bearish", 0.8))
-    # spinning_top rejected per spec (weak body, no direction)
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev2 = df.iloc[-3] if len(df) >= 3 else prev
+    m_curr, m_prev = candle_metrics(curr), candle_metrics(prev)
+    m_prev2 = candle_metrics(prev2) if len(df) >= 3 else m_prev
 
-    # two-candle — decisive gate on engulfing/piercing/dark-cloud signal candle
-    p1_bull, p1_bear = p1["close"] > p1["open"], p1["close"] < p1["open"]
-    if decisive and p1_bear and bull and c["open"] <= p1["close"] and c["close"] >= p1["open"]:
-        hits.append(("bullish_engulfing", "bullish", 0.9))
-    if decisive and p1_bull and bear and c["open"] >= p1["close"] and c["close"] <= p1["open"]:
-        hits.append(("bearish_engulfing", "bearish", 0.9))
-    if decisive and p1_bear and bull and p1["close"] < p1["open"] and c["open"] < p1["close"] \
-            and c["close"] > (p1["open"] + p1["close"]) / 2 and c["close"] < p1["open"]:
-        hits.append(("piercing", "bullish", 0.8))
-    if decisive and p1_bull and bear and p1["close"] > p1["open"] and c["open"] > p1["close"] \
-            and c["close"] < (p1["open"] + p1["close"]) / 2 and c["close"] > p1["open"]:
-        hits.append(("dark_cloud", "bearish", 0.8))
-    # harami: small body inside prior large body (exempt — small body is required)
-    if body < _body(p1) * 0.5 and c["high"] <= p1["high"] and c["low"] >= p1["low"]:
-        hits.append(("bullish_harami" if p1_bear else "bearish_harami",
-                     "bullish" if p1_bear else "bearish", 0.65))
+    ts_str = str(curr["timestamp"])
+    # reject incomplete stub bars on 1h NSE charts
+    if timeframe == "1h" and ts_str.endswith("15:15:00"):
+        return []
 
-    # three-candle stars — signal candle should be decisive
-    if decisive and bear and p1["close"] < p1["open"] and p2["close"] > p2["open"] \
-            and p1["close"] < p2["open"] * 0.998:
-        hits.append(("evening_star", "bearish", 0.75))
-    if decisive and bull and p1["close"] > p1["open"] and p2["close"] < p2["open"] \
-            and p1["close"] > p2["open"] * 1.002:
-        hits.append(("morning_star", "bullish", 0.75))
+    atr14 = float(curr["atr14"]) if pd.notna(curr.get("atr14")) else 0.0
+    if atr14 > 0 and m_curr["range"] < atr14 * min_atr_mult:
+        return []
 
-    # three soldiers / crows — all three bodies must be decisive
-    if all(x["close"] > x["open"] for x in (p2, p1, c)) and \
-            all(_body(x) > _rng(x) * 0.6 for x in (p2, p1, c)):
-        hits.append(("three_white_soldiers", "bullish", 0.85))
-    if all(x["close"] < x["open"] for x in (p2, p1, c)) and \
-            all(_body(x) > _rng(x) * 0.6 for x in (p2, p1, c)):
-        hits.append(("three_black_crows", "bearish", 0.85))
+    prior_mean = float(df["close"].iloc[-6:-1].mean())
+    trend = get_trend_regime(float(curr["close"]), float(curr["ema20"]),
+                             float(curr.get("vwap") or curr["ema20"]), prior_mean)
+    rel_vol = float(curr["rel_vol_tod"])
+    signals: list[PatternSignal] = []
 
-    # rising / falling three methods — final candle decisive
-    if decisive and p2["close"] > p2["open"] and c["close"] > c["open"] and \
-            p1["close"] < p1["open"] and _body(p1) < _body(p2) * 0.5 \
-            and p1["low"] > p2["open"]:
-        hits.append(("rising_three", "bullish", 0.7))
-    if decisive and p2["close"] < p2["open"] and c["close"] < c["open"] and \
-            p1["close"] > p1["open"] and _body(p1) < _body(p2) * 0.5 \
-            and p1["high"] < p2["open"]:
-        hits.append(("falling_three", "bearish", 0.7))
+    # 1. Engulfing — current body >= 1.2x prior, >=60% body ratio
+    if m_curr["body_ratio"] >= 0.60 and m_curr["body"] >= m_prev["body"] * 1.20:
+        if m_prev["is_bear"] and m_curr["is_bull"]:
+            if curr["open"] <= prev["close"] and curr["close"] >= prev["open"]:
+                if trend == "downtrend" or (curr["close"] > curr["ema20"] and curr["close"] > curr.get("vwap", 0)):
+                    signals.append(_score_signal(ticker, "bullish_engulfing", "bullish", m_curr["body_ratio"], rel_vol, ts_str))
+        elif m_prev["is_bull"] and m_curr["is_bear"]:
+            if curr["open"] >= prev["close"] and curr["close"] <= prev["open"]:
+                if trend == "uptrend":
+                    signals.append(_score_signal(ticker, "bearish_engulfing", "bearish", m_curr["body_ratio"], rel_vol, ts_str))
 
-    return [{"pattern": n, "bias": b, "geom": g} for n, b, g in hits]
+    # 2. Morning / Evening Star
+    if len(df) >= 3:
+        c1_mid = prev2["open"] - (m_prev2["body"] / 2.0)
+        if (trend == "downtrend" and m_prev2["is_bear"] and m_prev2["body_ratio"] >= 0.65
+                and m_prev["body_ratio"] <= 0.35 and m_curr["is_bull"]
+                and m_curr["body_ratio"] >= 0.60 and curr["close"] >= c1_mid):
+            signals.append(_score_signal(ticker, "morning_star", "bullish", m_curr["body_ratio"], rel_vol, ts_str))
+        c1_mid_bull = prev2["open"] + (m_prev2["body"] / 2.0)
+        if (trend == "uptrend" and m_prev2["is_bull"] and m_prev2["body_ratio"] >= 0.65
+                and m_prev["body_ratio"] <= 0.35 and m_curr["is_bear"]
+                and m_curr["body_ratio"] >= 0.60 and curr["close"] <= c1_mid_bull):
+            signals.append(_score_signal(ticker, "evening_star", "bearish", m_curr["body_ratio"], rel_vol, ts_str))
 
+    # 3. Piercing Line / Dark Cloud Cover
+    if m_prev["body_ratio"] >= 0.65 and m_curr["body_ratio"] >= 0.60:
+        if trend == "downtrend" and m_prev["is_bear"] and m_curr["is_bull"]:
+            c1_mid = prev["open"] - (m_prev["body"] / 2.0)
+            if curr["open"] < prev["low"] and curr["close"] >= c1_mid:
+                signals.append(_score_signal(ticker, "piercing_line", "bullish", m_curr["body_ratio"], rel_vol, ts_str))
+        if trend == "uptrend" and m_prev["is_bull"] and m_curr["is_bear"]:
+            c1_mid_bull = prev["open"] + (m_prev["body"] / 2.0)
+            if curr["open"] > prev["high"] and curr["close"] <= c1_mid_bull:
+                signals.append(_score_signal(ticker, "dark_cloud_cover", "bearish", m_curr["body_ratio"], rel_vol, ts_str))
 
-# ---------------------------------------------------------------------------
-# Confidence scoring — geometry 45% + trend/levels 35% + volume 20%
-# ---------------------------------------------------------------------------
+    # 4. Tweezer Bottom / Top (matching wick tips within 0.05%)
+    tol = 0.0005
+    low_diff = abs(curr["low"] - prev["low"]) / prev["low"]
+    high_diff = abs(curr["high"] - prev["high"]) / prev["high"]
+    if trend == "downtrend" and low_diff <= tol and m_prev["is_bear"] and m_curr["is_bull"]:
+        signals.append(_score_signal(ticker, "tweezer_bottom", "bullish", 1.0 - low_diff, rel_vol, ts_str))
+    elif trend == "uptrend" and high_diff <= tol and m_prev["is_bull"] and m_curr["is_bear"]:
+        signals.append(_score_signal(ticker, "tweezer_top", "bearish", 1.0 - high_diff, rel_vol, ts_str))
 
-def _ema(vals: list[float], n: int) -> list[float]:
-    k = 2 / (n + 1)
-    out = [vals[0]]
-    for v in vals[1:]:
-        out.append(v * k + out[-1] * (1 - k))
-    return out
+    # 5. Three White Soldiers / Three Black Crows
+    if len(df) >= 3:
+        if (trend == "downtrend" and m_prev2["is_bull"] and m_prev2["body_ratio"] >= 0.60
+                and m_prev["is_bull"] and m_prev["body_ratio"] >= 0.60 and prev["open"] >= prev2["open"]
+                and m_curr["is_bull"] and m_curr["body_ratio"] >= 0.60 and curr["open"] >= prev["open"]):
+            signals.append(_score_signal(ticker, "three_white_soldiers", "bullish", m_curr["body_ratio"], rel_vol, ts_str))
+        if (trend == "uptrend" and m_prev2["is_bear"] and m_prev2["body_ratio"] >= 0.60
+                and m_prev["is_bear"] and m_prev["body_ratio"] >= 0.60 and prev["open"] <= prev2["open"]
+                and m_curr["is_bear"] and m_curr["body_ratio"] >= 0.60 and curr["open"] <= prev["open"]):
+            signals.append(_score_signal(ticker, "three_black_crows", "bearish", m_curr["body_ratio"], rel_vol, ts_str))
 
+    # 6. Pin bars — Hammer/Hanging Man, Shooting Star/Inverted Hammer
+    if 0.05 <= m_curr["body_ratio"] <= 0.35 and m_curr["lower_ratio"] >= 0.60 and m_curr["upper_ratio"] <= 0.15:
+        if trend == "downtrend":
+            signals.append(_score_signal(ticker, "hammer", "bullish", m_curr["lower_ratio"], rel_vol, ts_str))
+        elif trend == "uptrend":
+            signals.append(_score_signal(ticker, "hanging_man", "bearish", m_curr["lower_ratio"], rel_vol, ts_str))
+    if 0.05 <= m_curr["body_ratio"] <= 0.35 and m_curr["upper_ratio"] >= 0.60 and m_curr["lower_ratio"] <= 0.15:
+        if trend == "uptrend":
+            signals.append(_score_signal(ticker, "shooting_star", "bearish", m_curr["upper_ratio"], rel_vol, ts_str))
+        elif trend == "downtrend":
+            signals.append(_score_signal(ticker, "inverted_hammer", "bullish", m_curr["upper_ratio"], rel_vol, ts_str))
 
-def score_setup(candles: list[dict], hit: dict, timeframe: str) -> tuple[float, str]:
-    """Return (confidence 0-100, justification string)."""
-    c = candles[-1]
-    closes = [x["close"] for x in candles]
-    vols = [x.get("volume") or 0 for x in candles]
+    # 7. Marubozu / Belt Hold — requires volume surge
+    if m_curr["body_ratio"] >= 0.85 and rel_vol >= 1.50:
+        if m_curr["is_bull"] and trend != "downtrend":
+            signals.append(_score_signal(ticker, "marubozu", "bullish", m_curr["body_ratio"], rel_vol, ts_str))
+        elif m_curr["is_bear"] and trend != "uptrend":
+            signals.append(_score_signal(ticker, "marubozu", "bearish", m_curr["body_ratio"], rel_vol, ts_str))
 
-    # --- geometry (45%) ---
-    geom = hit["geom"] * 100
+    # 8. Rising Three Methods — 5-candle structure
+    if len(df) >= 5:
+        c1 = df.iloc[-5]
+        m1 = candle_metrics(c1)
+        mid = df.iloc[-4:-1]
+        if (m1["is_bull"] and m1["body_ratio"] >= 0.65 and m_curr["is_bull"]
+                and m_curr["body_ratio"] >= 0.65 and curr["close"] > c1["high"]
+                and mid["low"].min() > c1["low"] and mid["high"].max() <= c1["high"]):
+            signals.append(_score_signal(ticker, "rising_three", "bullish", m_curr["body_ratio"], rel_vol, ts_str))
 
-    # --- trend & level alignment (35%) ---
-    trend_score = 50.0
-    just = []
-    e20 = vwap = None
-    if len(closes) >= 10:
-        e20 = _ema(closes, 20)[-1]
-    if timeframe in {"5m", "15m", "1h"}:
-        pv = sum(((x["high"] + x["low"] + x["close"]) / 3) * (x.get("volume") or 0) for x in candles[-78:])
-        vv = sum(x.get("volume") or 0 for x in candles[-78:])
-        if vv > 0:
-            vwap = pv / vv
+    # 9. Doji — only if nothing else fired, capped at 72%
+    if not signals and m_curr["body_ratio"] < 0.08:
+        sig = _score_signal(ticker, "doji", "neutral", 1.0 - m_curr["body_ratio"], rel_vol, ts_str)
+        sig.confidence = min(sig.confidence, 72.0)
+        signals.append(sig)
 
-    if e20 is not None or vwap is not None:
-        above_ema = e20 is not None and c["close"] > e20
-        above_vwap = vwap is not None and c["close"] > vwap
-        # trend-alignment: bearish REVERSALS must reverse an upswing
-        # (close above EMA20 or VWAP); bearish CONTINUATIONS are allowed below.
-        BEAR_REV = {"shooting_star", "bearish_engulfing", "evening_star",
-                    "dark_cloud", "bearish_harami", "hanging_man"}
-        BEAR_CONT = {"three_black_crows", "falling_three"}
-        pat = hit.get("pattern", "")
-        if pat in BEAR_REV:
-            upswing = above_ema or above_vwap
-            if not upswing:
-                trend_score = 15.0
-                just.append("bearish rev but below EMA20/VWAP — no upswing to reverse")
-            else:
-                trend_score = 85.0
-                just.append("reversing upswing (above EMA/VWAP)")
-        elif pat in BEAR_CONT:
-            trend_score = 70.0 if (not above_ema and not above_vwap) else 40.0
-            just.append("bearish continuation" + (" below levels" if trend_score == 70.0 else ""))
-        else:
-            want_up = hit["bias"] == "bullish"
-            aligned = (above_ema if e20 is not None else above_vwap)
-            if want_up == aligned:
-                trend_score = 85.0
-            else:
-                trend_score = 25.0
-            ref = "EMA20" if e20 is not None else "VWAP"
-            just.append(f"{'above' if aligned else 'below'} {ref}")
-        # prior 5-candle momentum agrees?
-        mom = (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else 0
-        if (hit["bias"] == "bullish" and mom > 0) or (hit["bias"] == "bearish" and mom < 0) \
-                or hit["bias"] == "neutral":
-            trend_score = min(100.0, trend_score + 10)
-    else:
-        just.append("insufficient history")
-
-    # --- volume confirmation (20%) ---
-    vol_score = 50.0
-    if len(vols) >= 21:
-        avg = sum(vols[-21:-1]) / 20
-        if avg > 0:
-            ratio = vols[-1] / avg
-            vol_score = min(100.0, ratio * 50)  # 1x avg -> 50, 2x -> 100
-            just.append(f"vol {ratio:.1f}x avg")
-
-    conf = round(geom * 0.45 + trend_score * 0.35 + vol_score * 0.20, 1)
-
-    # closing-auction guard: 15:00-15:30 IST volume spikes are square-off
-    # noise — cap confidence so they can't push a setup over 80%
-    if timeframe in {"5m", "15m"}:
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        ist_min = datetime.fromtimestamp(c["time"], ZoneInfo("Asia/Kolkata")).hour * 60 \
-            + datetime.fromtimestamp(c["time"], ZoneInfo("Asia/Kolkata")).minute
-        if ist_min >= 15 * 60:
-            if conf > 80.0:
-                just.append("close-auction volume capped")
-            conf = min(conf, 80.0)
-        if vwap is not None:
-            just.append(f"vs VWAP {vwap:.2f}")
-
-    return conf, "; ".join(just)
-
-
-def _atr(candles: list[dict], n: int = 14) -> float:
-    trs = []
-    for i in range(1, len(candles)):
-        h, l, pc = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    return sum(trs[-n:]) / min(n, len(trs)) if trs else 0.0
-
-
-def _levels(candles: list[dict], bias: str) -> dict:
-    """SL + T1/T2/T3 in R-multiples of ATR(14) from signal close."""
-    c = candles[-1]
-    entry = c["close"]
-    risk = max(_atr(candles), _rng(c))
-    if risk <= 0 or bias == "neutral":
-        return {}
-    m = 1 if bias == "bullish" else -1
-    return {
-        "sl": round(entry - m * risk, 2),
-        "t1": round(entry + m * risk * 1.0, 2),
-        "t2": round(entry + m * risk * 2.0, 2),
-        "t3": round(entry + m * risk * 3.0, 2),
-    }
+    return signals
 
 
 # ---------------------------------------------------------------------------
-# Data fetch + scan
+# Data fetch + indicators
 # ---------------------------------------------------------------------------
 
 def _symbols_for(key: str) -> list[str]:
-    """Resolve a universe key to symbol list.
+    """Resolve universe key to symbol list.
 
-    'multicap'/'smallcap' load symbols_<key>.json (a JSON array of NSE
-    tickers) so real Nifty Midcap/Smallcap constituent lists can be
-    dropped in without code changes. Falls back to the broad list.
+    smallcap = BROAD_STOCKS minus ACTIVE_STOCKS (the ~80 extra names are the
+    smaller/less-liquid tail); multicap = ACTIVE_STOCKS (~100 liquid names).
+    A symbols_<key>.json file still overrides either if present.
     """
-    import json
-    import os
+    import json, os
     from scanner import NIFTY50, ACTIVE_STOCKS, BROAD_STOCKS
 
-    builtin = {"nifty50": NIFTY50, "active": ACTIVE_STOCKS, "broad": BROAD_STOCKS}
-    if key in builtin:
-        return builtin[key]
+    smallcap = [s for s in BROAD_STOCKS if s not in set(ACTIVE_STOCKS)]
+    builtin = {
+        "nifty50": NIFTY50,
+        "active": ACTIVE_STOCKS,
+        "broad": BROAD_STOCKS,
+        "multicap": ACTIVE_STOCKS,
+        "smallcap": smallcap,
+    }
     path = f"symbols_{key}.json"
     if os.path.exists(path):
         try:
@@ -315,34 +273,67 @@ def _symbols_for(key: str) -> list[str]:
                 return syms
         except Exception as exc:
             logger.warning("Could not load %s: %s", path, exc)
-    return BROAD_STOCKS
+    return builtin[key]
 
 
-def _fetch(sym: str, interval: str, period: str) -> Optional[list[dict]]:
+def _prepare_df(sym: str, interval: str, period: str) -> Optional[pd.DataFrame]:
+    """Fetch OHLCV, drop the open candle, add ema20/atr14/vwap/rel_vol_tod."""
     try:
         import yfinance as yf
         df = yf.Ticker(f"{sym}.NS").history(period=period, interval=interval, auto_adjust=False)
         if df is None or df.empty or len(df) < 30:
             return None
-        # drop the currently open/incomplete candle
-        df = df.iloc[:-1] if interval != "1d" or True else df
-        out = []
-        for ts, r in df.iterrows():
-            out.append({
-                "time": int(ts.timestamp()), "open": float(r["Open"]),
-                "high": float(r["High"]), "low": float(r["Low"]),
-                "close": float(r["Close"]),
-                "volume": float(r["Volume"]) if r.get("Volume") == r.get("Volume") else 0.0,
-            })
-        return out
+        df = df.iloc[:-1].copy()  # drop currently-open candle
+        df.columns = [c.lower() for c in df.columns]
+        df = df.rename(columns={"datetime": "timestamp"})
+        df["timestamp"] = df.index
+        df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+        tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - df["close"].shift()).abs(),
+            (df["low"] - df["close"].shift()).abs(),
+        ], axis=1).max(axis=1)
+        df["atr14"] = tr.rolling(14).mean()
+        if interval in {"5m", "15m", "1h"}:
+            pv = (df["high"] + df["low"] + df["close"]) / 3 * df["volume"]
+            df["vwap"] = pv.cumsum() / df["volume"].cumsum().replace(0, float("nan"))
+        else:
+            df["vwap"] = df["ema20"]
+        df["rel_vol_tod"] = compute_tod_relative_volume(df)
+        return df
     except Exception:
         return None
 
 
+def _atr(candles_close: list, highs, lows, n: int = 14) -> float:
+    trs = []
+    for i in range(1, len(highs)):
+        h, l, pc = highs[i], lows[i], candles_close[i - 1]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    return sum(trs[-n:]) / min(n, len(trs)) if trs else 0.0
+
+
+def _levels(df: pd.DataFrame, bias: str) -> dict:
+    """SL + T1/T2/T3 in R-multiples of ATR(14) from signal close."""
+    entry = float(df.iloc[-1]["close"])
+    highs = df["high"].tolist(); lows = df["low"].tolist(); closes = df["close"].tolist()
+    risk = max(_atr(closes, highs, lows), float(df.iloc[-1]["high"] - df.iloc[-1]["low"]))
+    if risk <= 0 or bias == "neutral":
+        return {}
+    m = 1 if bias == "bullish" else -1
+    return {"sl": round(entry - m * risk, 2),
+            "t1": round(entry + m * risk, 2),
+            "t2": round(entry + m * risk * 2, 2),
+            "t3": round(entry + m * risk * 3, 2)}
+
+
+# ---------------------------------------------------------------------------
+# Scan + report
+# ---------------------------------------------------------------------------
+
 def run_scan(universe_key: str, tf_key: str, group: str,
-             threshold: float, logger: Optional[logging.Logger] = None) -> str:
-    """Execute a configured scan; returns markdown report."""
-    log = logger or logging.getLogger("chart_reader")
+             threshold: float, log: Optional[logging.Logger] = None) -> str:
+    log = log or logger
     _, interval, period = TIMEFRAMES[tf_key]
     tf_label = TIMEFRAMES[tf_key][0]
     group_name = {"all": "All patterns", "bullish": "Bullish reversals",
@@ -353,21 +344,21 @@ def run_scan(universe_key: str, tf_key: str, group: str,
     results = []
 
     for sym in symbols:
-        candles = _fetch(sym, interval, period)
-        if not candles:
+        df = _prepare_df(sym, interval, period)
+        if df is None:
             continue
-        for hit in detect_patterns(candles):
-            if hit["pattern"] not in allowed:
+        for sig in classify_comprehensive_patterns(df, sym, interval):
+            if sig.pattern not in allowed or sig.bias == "neutral" and group != "all" and group != "continuation":
                 continue
-            conf, why = score_setup(candles, hit, interval)
-            if conf >= threshold:
-                c = candles[-1]
+            if sig.confidence >= threshold:
+                c = df.iloc[-1]
                 results.append({
-                    "symbol": sym, "pattern": hit["pattern"], "bias": hit["bias"],
-                    "confidence": conf, "time": c["time"],
+                    "symbol": sig.ticker, "pattern": sig.pattern, "bias": sig.bias,
+                    "confidence": sig.confidence, "timestamp": sig.timestamp,
                     "ohlc": f"O{c['open']:.2f} H{c['high']:.2f} L{c['low']:.2f} C{c['close']:.2f}",
-                    "vol": c.get("volume") or 0, "why": why,
-                    **_levels(candles, hit["bias"]),
+                    "vol": float(c["volume"] or 0),
+                    "why": f"body {sig.body_ratio:.0f}% · relVol {sig.rel_vol_tod:.1f}x",
+                    **_levels(df, sig.bias),
                 })
 
     results.sort(key=lambda r: r["confidence"], reverse=True)
@@ -390,7 +381,11 @@ def run_scan(universe_key: str, tf_key: str, group: str,
     from datetime import datetime
     from zoneinfo import ZoneInfo
     for r in results[:25]:
-        t = datetime.fromtimestamp(r["time"], ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M")
+        try:
+            t = datetime.fromtimestamp(pd.Timestamp(r["timestamp"]).timestamp(),
+                                       ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            t = str(r["timestamp"])
         lv = (f"{r.get('sl','—')} | {r.get('t1','—')} | {r.get('t2','—')} | {r.get('t3','—')}"
               if r.get("sl") is not None else "— | — | — | —")
         lines.append(

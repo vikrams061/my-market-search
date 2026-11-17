@@ -98,3 +98,35 @@ def record_iron_condor(
         short_strike=put_short, long_strike=put_long,
         strategy=strategy,
     )
+
+
+def evaluate_credit_outcome(row: dict, current_price: float) -> tuple[float, str]:
+    """Score a credit pick against the live underlying price.
+
+    Returns (score, status): +1.0 win / -1.0 loss for strike-defined
+    outcomes; falls back to spot return % when strikes are missing.
+    """
+    side = row.get("side")
+    short_strike = row.get("short_strike")
+    strategy = row.get("strategy") or ""
+
+    if short_strike is None:
+        entry = row.get("entry_price") or current_price
+        return round(((current_price / entry) - 1) * 100, 2), "active"
+
+    if side == "bullish":      # Bull Put Spread — profit while spot >= short strike
+        win = current_price >= short_strike
+    elif side == "bearish":    # Bear Call Spread — profit while spot <= short strike
+        win = current_price <= short_strike
+    elif side == "neutral":    # Iron Condor — profit inside the short-strike range
+        try:
+            if "call" in strategy:
+                call_short = float(strategy.split("call ")[1].split("/")[0])
+                win = short_strike <= current_price <= call_short
+            else:
+                win = current_price >= short_strike
+        except Exception:
+            win = current_price >= short_strike
+    else:
+        return 0.0, "unknown"
+    return (1.0 if win else -1.0), ("win" if win else "loss")

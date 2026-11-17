@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Groww Market Watch</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: #0f172a; color: #e2e8f0;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .sub { color: #94a3b8; font-size: .85rem; margin-bottom: 1.5rem; }
+  .controls { display: flex; gap: .5rem; margin-bottom: 1.25rem; }
+  .controls input, .controls select {
+    background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+    border-radius: 8px; padding: .55rem .8rem; font-size: .9rem;
+  }
+  .controls input { width: 220px; text-transform: uppercase; }
+  .controls button {
+    background: #6366f1; color: #fff; border: none; border-radius: 8px;
+    padding: .55rem 1.1rem; font-size: .9rem; cursor: pointer;
+  }
+  .controls button:hover { background: #4f46e5; }
+  .empty { color: #64748b; padding: 2rem; text-align: center;
+           background: #1e293b; border-radius: 10px; }
+  .del {
+    background: none; border: none; color: #64748b; cursor: pointer;
+    font-size: 1rem; padding: 0 .25rem;
+  }
+  .del:hover { color: #f87171; }
+  .analyst { margin-top: 2rem; }
+  .analyst h2 { font-size: 1.1rem; margin-bottom: .75rem; }
+  #analyze-btn {
+    background: #0ea5e9; color: #fff; border: none; border-radius: 8px;
+    padding: .6rem 1.2rem; font-size: .9rem; cursor: pointer;
+  }
+  #analyze-btn:hover:not(:disabled) { background: #0284c7; }
+  #analyze-btn:disabled { opacity: .5; cursor: wait; }
+  #analysis-status { margin: .75rem 0; font-size: .85rem; color: #94a3b8; }
+  #report {
+    background: #1e293b; border-radius: 10px; padding: 1.5rem 2rem;
+    line-height: 1.6; overflow-x: auto;
+  }
+  #report h1, #report h2, #report h3 { color: #7dd3fc; margin-top: 1.2em; }
+  #report table { border-collapse: collapse; margin: .75rem 0; font-size: .85rem; }
+  #report th, #report td { border: 1px solid #334155; padding: .4rem .8rem; }
+  #report th { background: #334155; }
+  #report code { background: #0f172a; padding: .1rem .35rem; border-radius: 4px; }
+  #report pre { background: #0f172a; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+  #report pre code { background: none; padding: 0; }
+  #report ul, #report ol { padding-left: 1.4rem; }
+  #report blockquote { border-left: 3px solid #334155; margin: .75rem 0;
+                       padding-left: 1rem; color: #94a3b8; }
+  .picks { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  .pick-card { background: #1e293b; border-radius: 10px; padding: 1.1rem 1.3rem; }
+  .pick-card.bull { border-left: 4px solid #4ade80; }
+  .pick-card.bear { border-left: 4px solid #f87171; }
+  .pick-card h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
+  .pick-card .score { font-size: .8rem; color: #94a3b8; }
+  .pick-card .ltp { font-size: 1.5rem; font-weight: 700; margin: .4rem 0 .1rem; }
+  .pick-card .meta { font-size: .8rem; color: #94a3b8; line-height: 1.7; }
+  .pick-card .move { font-size: .85rem; font-weight: 600; }
+  .up { color: #4ade80; } .down { color: #f87171; } .flat { color: #94a3b8; }
+  .lists { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  .mini-list { background: #1e293b; border-radius: 10px; padding: .8rem 1.1rem; font-size: .85rem; }
+  .mini-list h4 { margin: .2rem 0 .5rem; font-size: .85rem; color: #cbd5e1; }
+  .mini-list div { display: flex; justify-content: space-between; padding: .15rem 0; }
+  .scan-btn { background: #0ea5e9; color:#fff; border:none; border-radius:8px;
+              padding:.5rem 1rem; font-size:.85rem; cursor:pointer; margin-left:.75rem; }
+  .scan-btn:disabled { opacity:.5; cursor:wait; }
+  .tf-btn.active { background:#4f46e5; }
+  .perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; margin: .75rem 0; }
+  .perf-stat { background: #1e293b; border-radius: 10px; padding: .8rem 1rem; }
+  .perf-stat .label { font-size: .72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .04em; }
+  .perf-stat .value { font-size: 1.3rem; font-weight: 700; margin-top: .2rem; }
+  #perf-table { width: 100%; border-collapse: collapse; background: #1e293b;
+               border-radius: 10px; overflow: hidden; font-size: .82rem; }
+  #perf-table th, #perf-table td { padding: .45rem .8rem; text-align: left; }
+  #perf-table th { background: #334155; font-size: .72rem; text-transform: uppercase; }
+  #perf-table tr + tr td { border-top: 1px solid #334155; }
+  .today-tag { font-size: .65rem; background: #0ea5e9; color: #fff;
+               border-radius: 4px; padding: .1rem .35rem; margin-left: .35rem; }
+  .tabs { display: flex; gap: .4rem; margin: 1.25rem 0 1.5rem; flex-wrap: wrap; }
+  .tab-btn {
+    background: #1e293b; color: #94a3b8; border: 1px solid #334155;
+    border-radius: 8px; padding: .5rem 1rem; font-size: .85rem; cursor: pointer;
+  }
+  .tab-btn.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  table { width: 100%; border-collapse: collapse; background: #1e293b;
+          border-radius: 10px; overflow: hidden; }
+  th, td { padding: .7rem 1rem; text-align: left; }
+  th { background: #334155; font-size: .75rem; text-transform: uppercase;
+       letter-spacing: .05em; color: #cbd5e1; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr + tr td { border-top: 1px solid #334155; }
+  .sym { font-weight: 600; }
+  .badge { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px;
+           background: #334155; color: #cbd5e1; }
+  .up { color: #4ade80; } .down { color: #f87171; } .flat { color: #94a3b8; }
+  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+           background: #4ade80; margin-right: .4rem; animation: p 1.5s infinite; }
+  @keyframes p { 50% { opacity: .3; } }
+  #status { margin-top: 1rem; font-size: .8rem; color: #64748b; }
+</style>
+</head>
+<body>
+  <h1><span class="pulse"></span>Groww Market Watch</h1>
+  <div class="sub" id="meta">Loading…</div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('dashboard', this)">Dashboard</button>
+    <button class="tab-btn" onclick="switchTab('analyst', this)">Analyst</button>
+    <button class="tab-btn" onclick="switchTab('nifty', this)">NIFTY 50</button>
+    <button class="tab-btn" onclick="switchTab('active', this)">Active Stocks</button>
+    <button class="tab-btn" onclick="switchTab('check', this)">Trend Check</button>
+    <button class="tab-btn" onclick="switchTab('radar', this)">Momentum Radar</button>
+    <button class="tab-btn" onclick="switchTab('options', this)">Options Desk</button>
+    <button class="tab-btn" onclick="switchTab('orb', this)">ORB / VWAP</button>
+    <button class="tab-btn" onclick="switchTab('credit', this)">Credit Desk</button>
+    <button class="tab-btn" onclick="switchTab('credittracker', this)">Credit Tracker</button>
+    <button class="tab-btn" onclick="switchTab('chartreader', this)">Chart Reader</button>
+    <button class="tab-btn" onclick="switchTab('perf', this)">Performance</button>
+  </div>
+
+  <div class="tab-pane active" id="pane-dashboard">
+  <div class="analyst" style="margin-bottom:.75rem">
+    <h2>Today's Performance <span class="meta" style="font-size:.75rem;color:#64748b">IST · live mark-to-market</span></h2>
+    <div class="perf-grid" id="dash-perf"></div>
+    <table id="dash-perf-table" style="margin-top:.5rem">
+      <thead><tr>
+        <th>Date/Time</th><th>Agent</th><th>Side</th><th>Symbol</th>
+        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
+      </tr></thead>
+      <tbody id="dash-perf-rows"></tbody>
+    </table>
+  </div>
+  <div class="controls">
+    <input id="sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
+    <select id="kind">
+      <option value="EQ">Equity</option>
+      <option value="INDEX">Index</option>
+    </select>
+    <button onclick="addInstrument()">+ Add</button>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Symbol</th><th>Type</th><th class="num">LTP</th>
+      <th class="num">Chg %</th><th class="num">Volume</th>
+      <th class="num">Last Trade</th><th class="num">Age</th><th></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">
+    No instruments yet — add a symbol above to start watching.
+  </div>
+  <div id="status"></div>
+
+  <div class="analyst">
+    <h2>NIFTY Live Chart
+      <span class="meta" style="font-size:.75rem;color:#64748b">candles from market-watch ticks</span>
+      <span style="margin-left:.75rem">
+        <button class="scan-btn tf-btn" data-tf="5" onclick="setTf('5',this)">5m</button>
+        <button class="scan-btn tf-btn active" data-tf="15" onclick="setTf('15',this)">15m</button>
+        <button class="scan-btn tf-btn" data-tf="60" onclick="setTf('60',this)">1h</button>
+        <button class="scan-btn tf-btn" data-tf="D" onclick="setTf('D',this)">1D</button>
+        <button class="scan-btn" onclick="zoomChart(niftyChart,1.4)">+</button>
+        <button class="scan-btn" onclick="zoomChart(niftyChart,0.7)">&minus;</button>
+        <button class="scan-btn" onclick="niftyChart&&niftyChart.timeScale().fitContent()">Reset</button>
+        <button class="scan-btn tf-btn active" id="tf-candle-n" onclick="setSeriesType('nifty','candles')">Candles</button>
+        <button class="scan-btn tf-btn" id="tf-line-n" onclick="setSeriesType('nifty','line')">Line</button>
+      </span>
+    </h2>
+    <div id="nifty-chart" style="height:320px"></div>
+
+    <div class="controls" style="margin-top:1rem">
+      <input id="stk-sym" placeholder="STOCK SYMBOL" maxlength="20" />
+      <select id="stk-kind"><option value="EQ">Stock</option><option value="INDEX">Index</option></select>
+      <button onclick="loadStockChart('stk')">Load Chart</button>
+      <span style="margin-left:.75rem">
+        <button class="scan-btn tf-btn active" data-stf="5" onclick="setStf('stk',5,this)">5m</button>
+        <button class="scan-btn tf-btn" data-stf="15" onclick="setStf('stk',15,this)">15m</button>
+        <button class="scan-btn tf-btn" data-stf="60" onclick="setStf('stk',60,this)">1h</button>
+        <button class="scan-btn tf-btn" data-stf="D" onclick="setStf('stk','D',this)">D</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk.chart,1.4)">+</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk.chart,0.7)">&minus;</button>
+        <button class="scan-btn" onclick="stockCharts.stk.chart&&stockCharts.stk.chart.timeScale().fitContent()">Reset</button>
+        <button class="scan-btn tf-btn active" id="tf-candle-s" onclick="setSeriesType('stk','candles')">Candles</button>
+        <button class="scan-btn tf-btn" id="tf-line-s" onclick="setSeriesType('stk','line')">Line</button>
+      </span>
+    </div>
+    <div id="stk-chart" style="height:320px"></div>
+
+    <div class="controls" style="margin-top:1rem">
+      <input id="stk2-sym" placeholder="STOCK SYMBOL 2" maxlength="20" />
+      <select id="stk2-kind"><option value="EQ">Stock</option><option value="INDEX">Index</option></select>
+      <button onclick="loadStockChart('stk2')">Load Chart</button>
+      <span style="margin-left:.75rem">
+        <button class="scan-btn tf-btn active" data-stf="5" onclick="setStf('stk2',5,this)">5m</button>
+        <button class="scan-btn tf-btn" data-stf="15" onclick="setStf('stk2',15,this)">15m</button>
+        <button class="scan-btn tf-btn" data-stf="60" onclick="setStf('stk2',60,this)">1h</button>
+        <button class="scan-btn tf-btn" data-stf="D" onclick="setStf('stk2','D',this)">D</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk2.chart,1.4)">+</button>
+        <button class="scan-btn" onclick="zoomChart(stockCharts.stk2.chart,0.7)">&minus;</button>
+        <button class="scan-btn" onclick="stockCharts.stk2.chart&&stockCharts.stk2.chart.timeScale().fitContent()">Reset</button>
+        <button class="scan-btn tf-btn active" id="tf-candle-s2" onclick="setSeriesType('stk2','candles')">Candles</button>
+        <button class="scan-btn tf-btn" id="tf-line-s2" onclick="setSeriesType('stk2','line')">Line</button>
+      </span>
+    </div>
+    <div id="stk2-chart" style="height:320px"></div>
+  </div>
+
+  </div><!-- /pane-dashboard -->
+
+  <div class="tab-pane" id="pane-perf">
+  <div class="analyst">
+    <h2>Agent Performance
+      <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
+    </h2>
+    <div id="agent-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;margin:.75rem 0"></div>
+    <div class="perf-grid" id="perf-stats"></div>
+    <table id="perf-table">
+      <thead><tr>
+        <th>Date</th><th>Agent</th><th>Side</th><th>Symbol</th>
+        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
+      </tr></thead>
+      <tbody id="perf-rows"></tbody>
+    </table>
+    <h3 style="margin-top:1rem">Agent Performance &amp; Improvements</h3>
+    <div id="outcome-stats"></div>
+    <div id="optimizer" style="margin-top:.75rem"></div>
+
+  </div>
+  </div><!-- /pane-perf -->
+
+  <div class="tab-pane" id="pane-analyst">
+  <div class="analyst">
+    <h2>Equity Analyst Agent</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">7-phase momentum report on your watchlist: news, technicals, targets, option strategy.</div>
+    <button id="analyze-btn" onclick="runAnalysis()">Run Momentum Analysis</button>
+    <div id="analysis-status"></div>
+    <div id="report"></div>
+  </div>
+  </div><!-- /pane-analyst -->
+
+  <div class="tab-pane" id="pane-nifty">
+  <div class="analyst">
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Daily momentum scan of all 50 NIFTY constituents — top bullish/bearish picks with bias &amp; confidence.</div>
+    <h2>Today's NIFTY 50 Picks
+      <button class="scan-btn" id="scan-btn" onclick="startScan()">Rescan</button>
+    </h2>
+    <div id="scan-status" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
+    <div class="picks" id="pick-cards"></div>
+    <div class="lists">
+      <div class="mini-list"><h4>Top 5 Bullish</h4><div id="top5"></div></div>
+      <div class="mini-list"><h4>Top 5 Bearish</h4><div id="bottom5"></div></div>
+    </div>
+  </div>
+  </div><!-- /pane-nifty -->
+
+  <div class="tab-pane" id="pane-active">
+  <div class="analyst">
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Momentum scan of ~100 liquid NSE large/mid caps for today's active picks.</div>
+    <h2>Today's Active Stock Picks
+      <button class="scan-btn" id="active-scan-btn" onclick="startActiveScan()">Rescan</button>
+    </h2>
+    <div id="active-scan-status" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
+    <div class="picks" id="active-cards"></div>
+  </div>
+  </div><!-- /pane-active -->
+
+  <div class="tab-pane" id="pane-check">
+  <div class="analyst">
+    <h2>Trend &amp; Momentum Check</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">On-demand trend bias, momentum score &amp; confidence for any stock or index.</div>
+    <div class="controls">
+      <input id="check-sym" placeholder="Any symbol (e.g. TATAMOTORS, NIFTY)" maxlength="30" />
+      <select id="check-kind">
+        <option value="EQ">Stock</option>
+        <option value="INDEX">Index</option>
+      </select>
+      <button onclick="checkSymbol()">Check</button>
+    </div>
+    <div id="check-result"></div>
+  </div>
+  </div><!-- /pane-check -->
+
+  <div class="tab-pane" id="pane-radar">
+  <div class="analyst">
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Broad ~180-symbol multi-cap scan (small/mid/large) — top momentum names with bias &amp; confidence.</div>
+    <h2>Momentum Radar — All Caps
+      <button class="scan-btn" id="mom-scan-btn" onclick="startMomScan()">Rescan</button>
+    </h2>
+    <div id="mom-scan-status" style="font-size:.85rem;color:#94a3b8;margin-bottom:.5rem"></div>
+    <div class="lists">
+      <div class="mini-list"><h4>Top Bullish</h4><div id="mom-top"></div></div>
+      <div class="mini-list"><h4>Top Bearish</h4><div id="mom-bottom"></div></div>
+    </div>
+  </div>
+  </div><!-- /pane-radar -->
+
+  <div class="tab-pane" id="pane-options">
+  <div class="analyst">
+    <h2>Options Desk — Defined-Risk Spreads</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">RSI+EMA swing setups with Bull Call / Bear Put spreads, targets &amp; 1:2 R:R checks.</div>
+    <div class="controls">
+      <input id="opt-sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
+      <select id="opt-kind">
+        <option value="EQ">Stock</option>
+        <option value="INDEX">Index</option>
+      </select>
+      <button onclick="runOptions()">Analyze</button>
+    </div>
+    <div id="opt-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="opt-report"></div>
+  </div>
+  </div><!-- /pane-options -->
+
+  <div class="tab-pane" id="pane-chartreader">
+  <div class="analyst">
+    <h2>Chart Reader — Candlestick Pattern Screener</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">4-step setup: universe, timeframe, pattern group, min confidence. Scans completed candles only.</div>
+    <div class="controls">
+      <select id="cr-uni">
+        <option value="1A">1A · Nifty 50</option>
+        <option value="1B" selected>1B · Small + Midcap</option>
+        <option value="1C">1C · All Nifty (~100)</option>
+      </select>
+      <select id="cr-tf">
+        <option value="2A">2A · 5m</option>
+        <option value="2B" selected>2B · 15m</option>
+        <option value="2C">2C · 1h</option>
+        <option value="2D">2D · 1d</option>
+      </select>
+      <select id="cr-grp">
+        <option value="3A" selected>3A · All patterns</option>
+        <option value="3B">3B · Bullish reversal</option>
+        <option value="3C">3C · Bearish reversal</option>
+        <option value="3D">3D · Continuation</option>
+      </select>
+      <select id="cr-thr">
+        <option value="4A">4A · &gt;=75%</option>
+        <option value="4B" selected>4B · &gt;=80%</option>
+        <option value="4C">4C · &gt;=90%</option>
+      </select>
+      <button onclick="runChartScan()">Scan</button>
+    </div>
+    <div id="cr-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="cr-report"></div>
+  </div>
+  </div><!-- /pane-chartreader -->
+
+  <div class="tab-pane" id="pane-orb">
+  <div class="analyst">
+    <h2>ORB / VWAP Momentum Desk</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">15m opening-range breakout + session VWAP + RVOL filter for intraday option entries.</div>
+    <div class="controls">
+      <input id="orb-sym" placeholder="Symbol (e.g. RELIANCE, NIFTY)" maxlength="30" />
+      <select id="orb-kind">
+        <option value="EQ">Stock</option>
+        <option value="INDEX">Index</option>
+      </select>
+      <button onclick="runOrb()">Analyze</button>
+    </div>
+    <div id="orb-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="orb-report"></div>
+  </div>
+  </div><!-- /pane-orb -->
+
+  <div class="tab-pane" id="pane-credit">
+  <div class="analyst">
+    <h2>Credit Desk — Defined-Risk Selling
+      <button class="scan-btn" onclick="runCredit()">Refresh</button>
+    </h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Regime-filtered credit strategies on <b>NIFTY</b> — auto-refreshes every 5 min; picks tracked for win/loss.</div>
+    <div id="credit-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="credit-report"></div>
+  </div>
+  </div><!-- /pane-credit -->
+
+  <div class="tab-pane" id="pane-credittracker">
+  <div class="analyst">
+    <h2>Credit Tracker — Strike-Aware Pick Log
+      <button class="scan-btn" onclick="loadCreditTracker()">Refresh</button>
+    </h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Recorded credit spreads &amp; iron condors with short/long strikes, scored win/loss against live spot. Source: <b>credit_tracker</b>.</div>
+    <div id="ct-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="ct-report"></div>
+  </div>
+  </div><!-- /pane-credittracker -->
+
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('pane-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+const REFRESH_MS = 2000;
+const fmtPrice = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmtVol = v => {
+  if (v == null) return '—';
+  if (v >= 1e7) return (v/1e7).toFixed(2) + ' Cr';
+  if (v >= 1e5) return (v/1e5).toFixed(2) + ' L';
+  if (v >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return v;
+};
+const fmtLtt = ms => ms == null ? '—' : new Date(ms).toLocaleTimeString('en-IN');
+const chgClass = v => v == null ? 'flat' : (v > 0 ? 'up' : v < 0 ? 'down' : 'flat');
+const chgText = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+
+async function addInstrument() {
+  const sym = document.getElementById('sym').value.trim().toUpperCase();
+  const kind = document.getElementById('kind').value;
+  if (!sym) return;
+  const res = await fetch('/api/instruments', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({symbol: sym, kind: kind})
+  });
+  if (res.ok) {
+    document.getElementById('sym').value = '';
+    tick();
+  } else {
+    const err = await res.json();
+    alert(err.detail || 'Failed to add instrument');
+  }
+}
+
+async function removeInstrument(sym) {
+  await fetch('/api/instruments/' + encodeURIComponent(sym), {method: 'DELETE'});
+  tick();
+}
+
+async function tick() {
+  try {
+    const res = await fetch('/api/quotes');
+    const data = await res.json();
+    const rows = document.getElementById('rows');
+    rows.innerHTML = '';
+    document.getElementById('empty').style.display = data.count ? 'none' : 'block';
+    for (const q of data.quotes) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td class="sym">${q.symbol}</td>` +
+        `<td><span class="badge">${q.kind}</span></td>` +
+        `<td class="num">${fmtPrice(q.ltp)}</td>` +
+        `<td class="num ${chgClass(q.change_pct)}">${chgText(q.change_pct)}</td>` +
+        `<td class="num">${fmtVol(q.volume)}</td>` +
+        `<td class="num">${fmtLtt(q.last_trade_time)}</td>` +
+        `<td class="num">${q.age_seconds}s</td>` +
+        `<td><button class="del" title="Remove" onclick="removeInstrument('${q.symbol}')">✕</button></td>`;
+      rows.appendChild(tr);
+    }
+    document.getElementById('meta').textContent =
+      `${data.count} instruments · updated ${new Date().toLocaleTimeString('en-IN')}` +
+      (data.feed ? ' · live feed ON' : ' · polling');
+    document.getElementById('status').textContent = '';
+  } catch (e) {
+    document.getElementById('status').textContent = 'Connection error — retrying…';
+  }
+}
+// ---- Analyst agent -------------------------------------------------------
+let analysisTimer = null;
+
+async function runAnalysis() {
+  const btn = document.getElementById('analyze-btn');
+  btn.disabled = true;
+  document.getElementById('analysis-status').textContent = 'Collecting market data & generating report…';
+  document.getElementById('report').innerHTML = '';
+  try {
+    const res = await fetch('/api/analyze', {method: 'POST'});
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('analysis-status').textContent = data.detail || 'Analysis failed';
+      btn.disabled = false;
+      return;
+    }
+    if (analysisTimer) clearInterval(analysisTimer);
+    analysisTimer = setInterval(pollAnalysis, 3000);
+    pollAnalysis();
+  } catch (e) {
+    document.getElementById('analysis-status').textContent = 'Request failed — is the server running?';
+    btn.disabled = false;
+  }
+}
+
+async function pollAnalysis() {
+  try {
+    const res = await fetch('/api/analysis');
+    const data = await res.json();
+    const statusEl = document.getElementById('analysis-status');
+    const btn = document.getElementById('analyze-btn');
+    if (data.status === 'done') {
+      document.getElementById('report').innerHTML = data.html;
+      statusEl.textContent = 'Report ready.';
+      btn.disabled = false;
+      clearInterval(analysisTimer); analysisTimer = null;
+    } else if (data.status === 'error') {
+      statusEl.textContent = 'Error: ' + (data.error || 'unknown');
+      btn.disabled = false;
+      clearInterval(analysisTimer); analysisTimer = null;
+    } else {
+      statusEl.textContent = 'Generating report… (this can take 30–90s)';
+    }
+  } catch (e) { /* keep polling */ }
+}
+
+// ---- NIFTY 50 scanner ----------------------------------------------------
+const fmtInr = v => v == null ? '—' : '₹' + Number(v).toLocaleString('en-IN', {maximumFractionDigits: 2});
+const cls = v => v == null ? 'flat' : (v > 0 ? 'up' : v < 0 ? 'down' : 'flat');
+const sgn = v => v == null ? '' : (v > 0 ? '+' : '');
+
+function pickCard(title, clsName, p, note) {
+  if (!p) return `<div class="pick-card ${clsName}"><h3>${title}</h3><div class="meta">No data</div></div>`;
+  const t = p.technicals || {};
+  const mv = p.movement || 0;
+  return `<div class="pick-card ${clsName}">
+    <h3>${p.symbol}</h3>
+    <div class="score">${p.trend_bias || ''} · Confidence ${p.confidence != null ? p.confidence + '%' : '—'} · Momentum ${p.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
+    <div class="ltp">${fmtInr(p.quote && p.quote.ltp)}</div>
+    <div class="move ${cls(p.quote && p.quote.change_pct)}">${sgn(p.quote && p.quote.change_pct)}${p.quote && p.quote.change_pct != null ? p.quote.change_pct.toFixed(2) : '—'}% today</div>
+    <div class="meta">Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'} 20d avg ·
+      EMA20 ${fmtInr(t.ema_20)} · EMA50 ${fmtInr(t.ema_50)}<br>
+      <span class="move ${cls(mv)}">Δ ${sgn(mv)}${mv.toFixed(2)} since last poll</span>${note ? '<br>' + note : ''}
+      ${p.targets ? `<br>T1 ${fmtInr(p.targets.t1)} (${p.targets.t1_tf}) · T2 ${fmtInr(p.targets.t2)} (${p.targets.t2_tf}) · SL ${fmtInr(p.targets.sl)}` : ''}</div>
+  </div>`;
+}
+
+async function refreshPicks() {
+  try {
+    const res = await fetch('/api/picks');
+    const d = await res.json();
+    const cards = document.getElementById('pick-cards');
+    if (d.status !== 'ready' || !d.picks) {
+      cards.innerHTML = '<div class="meta" style="color:#64748b">No pick for today yet — click Rescan.</div>';
+      return;
+    }
+    const p = d.picks;
+    cards.innerHTML =
+      pickCard('Bullish Pick', 'bull', p.bullish) +
+      pickCard('Bearish Pick', 'bear', p.bearish, p.bearish_note);
+    const fill = (id, arr) => document.getElementById(id).innerHTML =
+      (arr || []).map(e => `<div><span>${e.symbol}</span><span>${e.score} · ${fmtInr(e.cmp)}</span></div>`).join('');
+    fill('top5', p.top5); fill('bottom5', p.bottom5);
+  } catch (e) { /* keep polling */ }
+}
+
+async function scanStatus() {
+  try {
+    const res = await fetch('/api/scan/status');
+    const d = await res.json();
+    document.getElementById('scan-status').textContent =
+      d.status === 'running' ? `Scanning NIFTY 50… ${d.progress || ''}` :
+      d.status === 'done' ? `Last scan: ${d.progress || ''} symbols` : '';
+    document.getElementById('scan-btn').disabled = d.status === 'running';
+  } catch (e) {}
+}
+
+async function startScan() {
+  document.getElementById('scan-btn').disabled = true;
+  await fetch('/api/scan', {method: 'POST'});
+  setInterval(scanStatus, 2000);
+  scanStatus();
+}
+
+// ---- Active stocks scanner ----------------------------------------------
+function renderActivePicks(d) {
+  const cards = document.getElementById('active-cards');
+  if (d.status !== 'ready' || !d.picks) {
+    cards.innerHTML = '<div class="meta" style="color:#64748b">No active-stock pick for today yet — click Rescan.</div>';
+    return;
+  }
+  const p = d.picks;
+  const card = (title, clsName, pk, note) => {
+    if (!pk) return `<div class="pick-card ${clsName}"><h3>${title}</h3><div class="meta">No data</div></div>`;
+    const t = pk.technicals || {};
+    const mv = pk.movement || 0;
+    const tg = pk.targets;
+    return `<div class="pick-card ${clsName}">
+      <h3>${pk.symbol}</h3>
+      <div class="score">${pk.trend_bias || ''} · Confidence ${pk.confidence != null ? pk.confidence + '%' : '—'} · Momentum ${pk.momentum_score}/100 · RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(0) : '—'}</div>
+      <div class="ltp">${fmtInr(pk.quote && pk.quote.ltp)}</div>
+      <div class="move ${cls(pk.quote && pk.quote.change_pct)}">${sgn(pk.quote && pk.quote.change_pct)}${pk.quote && pk.quote.change_pct != null ? pk.quote.change_pct.toFixed(2) : '—'}% today</div>
+      <div class="meta">Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'} 20d avg ·
+        <span class="move ${cls(mv)}">Δ ${sgn(mv)}${mv.toFixed(2)}</span><br>
+        ${tg ? `T1 ${fmtInr(tg.t1)} (${tg.t1_tf}) · T2 ${fmtInr(tg.t2)} (${tg.t2_tf}) · SL ${fmtInr(tg.sl)}` : ''}${note ? '<br>' + note : ''}</div>
+    </div>`;
+  };
+  cards.innerHTML = card('Active Bullish Pick', 'bull', p.bullish) + card('Active Bearish Pick', 'bear', p.bearish, p.bearish_note);
+}
+
+async function refreshActivePicks() {
+  try {
+    const res = await fetch('/api/active/picks');
+    renderActivePicks(await res.json());
+  } catch (e) {}
+}
+
+async function activeScanStatus() {
+  try {
+    const res = await fetch('/api/active/scan/status');
+    const d = await res.json();
+    document.getElementById('active-scan-status').textContent =
+      d.status === 'running' ? `Scanning active stocks… ${d.progress || ''}` :
+      d.status === 'done' ? `Last scan: ${d.progress || ''} symbols` : '';
+    document.getElementById('active-scan-btn').disabled = d.status === 'running';
+  } catch (e) {}
+}
+
+async function startActiveScan() {
+  document.getElementById('active-scan-btn').disabled = true;
+  await fetch('/api/active/scan', {method: 'POST'});
+  setInterval(activeScanStatus, 2000);
+  activeScanStatus();
+}
+
+// ---- NIFTY live chart (candles built from market-watch ticks) -------------
+// breakout target lines (SL / T1 / T2 / T3) per chart
+const targetLines = {nifty: [], stk: [], stk2: []};
+function clearTargetLines(key, series) {
+  (targetLines[key] || []).forEach(l => { try { series.removePriceLine(l); } catch(e){} });
+  targetLines[key] = [];
+}
+function plotBreakoutTargets(key, series, entryPrice, isBuy, orSize, slPrice, orh, orl) {
+  clearTargetLines(key, series);
+  const m = isBuy ? 1 : -1;
+  if (slPrice == null) {
+    if (!orSize || orSize <= 0) return;
+    slPrice = entryPrice - m * orSize * 0.5;
+  }
+  targetLines[key] = [
+    series.createPriceLine({price: slPrice, color: '#f87171', lineWidth: 1, lineStyle: 3, title: 'SL'}),
+    series.createPriceLine({price: entryPrice + m * orSize * 1.0, color: '#4ade80', lineWidth: 1, lineStyle: 2, title: 'T1'}),
+    series.createPriceLine({price: entryPrice + m * orSize * 2.0, color: '#4ade80', lineWidth: 2, lineStyle: 2, title: 'T2'}),
+    series.createPriceLine({price: entryPrice + m * orSize * 3.0, color: '#38bdf8', lineWidth: 2, lineStyle: 1, title: 'T3'}),
+  ];
+}
+
+// IST time-of-day gate: 9:30-11:30 ok, 12:00-13:15 blackout,
+// 13:15-14:30 only with heavy volume (>1.5x rate), else closed
+function istMinutes(t) {
+  const s = new Date(t * 1000).toLocaleTimeString('en-GB',
+    {timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false});
+  const [h, m] = s.split(':').map(Number);
+  return h * 60 + m;
+}
+function timeGateOk(t, volRatio) {
+  const m = istMinutes(t);
+  if (m < 9 * 60 + 30 || m >= 14 * 60 + 30) return false;
+  if (m >= 12 * 60 && m < 13 * 60 + 15) return false;
+  if (m >= 13 * 60 + 15 && m < 14 * 60 + 30) return volRatio > 1.5;
+  return true;
+}
+
+// candles vs line series toggle (both series stay loaded; visibility toggles)
+const chartSeries = {nifty: {}, stk: {}, stk2: {}};
+function setSeriesType(key, type) {
+  chartSeries[key].type = type;
+  const s = chartSeries[key];
+  if (!s || !s.candle) return;
+  if (s.candle) s.candle.applyOptions({visible: type === 'candles'});
+  if (s.line) s.line.applyOptions({visible: type === 'line'});
+  const suf = {nifty: 'n', stk: 's', stk2: 's2'}[key] || key;
+  document.getElementById('tf-candle-' + suf).classList.toggle('active', type === 'candles');
+  document.getElementById('tf-line-' + suf).classList.toggle('active', type === 'line');
+}
+
+function zoomChart(chart, factor) {
+  if (!chart) return;
+  const ts = chart.timeScale();
+  const r = ts.getVisibleLogicalRange();
+  if (!r) { ts.fitContent(); return; }
+  const center = (r.from + r.to) / 2;
+  const half = (r.to - r.from) / 2 / factor;
+  ts.setVisibleLogicalRange({from: center - half, to: center + half});
+}
+
+let niftyChart = null, niftySeries = null, niftyOrh = null, niftyOrl = null, chartTf = '15', niftyFitted = false;
+function setTf(tf, btn) {
+  chartTf = tf;
+  niftyFitted = false;
+  document.querySelectorAll('[data-tf]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  refreshNiftyChart();
+}
+function initNiftyChart() {
+  if (niftyChart) return;
+  if (typeof LightweightCharts === 'undefined') {
+    setTimeout(initNiftyChart, 1000);  // retry until CDN lib loads
+    return;
+  }
+  niftyChart = LightweightCharts.createChart(document.getElementById('nifty-chart'),
+    {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
+     grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
+     timeScale:{borderColor:'#334155',timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#334155'}});
+  niftySeries = niftyChart.addCandlestickSeries({
+    upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
+    borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
+  niftyOrh = niftySeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
+  niftyOrl = niftySeries.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
+  const niftyLine = niftyChart.addLineSeries({color:'#818cf8',lineWidth:2,visible:false});
+  chartSeries.nifty = {candle: niftySeries, line: niftyLine, type: 'candles'};
+  refreshNiftyChart();
+  setInterval(refreshNiftyChart, 10000);
+}
+async function refreshNiftyChart() {
+  if (!niftySeries) return;
+  try {
+    const iv = chartTf === 'D' ? '1d' : chartTf === '60' ? '1h' : chartTf + 'm';
+    const d = await (await fetch(`/api/chart?symbol=NIFTY&kind=INDEX&interval=${iv}`)).json();
+    // up to 1 month of candles
+    if (d.candles && d.candles.length) {
+      const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
+      d.candles = d.candles.filter(c => c.time >= cutoff);
+      niftySeries.setData(d.candles);
+      if (chartSeries.nifty && chartSeries.nifty.line)
+        chartSeries.nifty.line.setData(d.candles.map(c => ({time: c.time, value: c.close})));
+      // hide ORH/ORL on Daily+ (no intraday opening range)
+      const isDaily = chartTf === 'D';
+      niftyOrh.applyOptions({visible: !isDaily});
+      niftyOrl.applyOptions({visible: !isDaily});
+      if (d.orh != null && !isDaily) niftyOrh.applyOptions({price: d.orh});
+      if (d.orl != null && !isDaily) niftyOrl.applyOptions({price: d.orl});
+      // markers: ORB crossover (ORB B/S) > B/S with wick+volume+cooldown filters
+      const orbMap = {};
+      (d.orb_markers || []).forEach(m => { orbMap[m.time] = m.side; });
+      const avgVol = d.candles.slice(-21, -1).reduce((a, c) => a + (c.volume || 0), 0)
+        / Math.max(1, Math.min(20, d.candles.length - 1));
+      const tfMinBase = chartTf === '60' ? 60 : chartTf === 'D' ? 1 : parseInt(chartTf) || 15;
+      const avgRateN = avgVol / tfMinBase;
+      let lastBull = 0, lastBear = 0, lastBrk = null;
+      const orSizeN = (d.orh != null && d.orl != null) ? d.orh - d.orl : 0;
+      const dailyOrN = d.daily_or || {};
+      const dayKey = t => new Date(t * 1000).toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+      niftySeries.setMarkers(d.candles.slice(-120).map((c, i, arr) => {
+        const orb = orbMap[c.time];
+        if (orb) {
+          const isBuy = orb === 'B';
+          lastBrk = {price: c.close, isBuy, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: isBuy ? 'belowBar' : 'aboveBar',
+                  color: isBuy ? '#4ade80' : '#f87171',
+                  shape: isBuy ? 'arrowUp' : 'arrowDown',
+                  text: isBuy ? 'ORB B' : 'ORB S'};
+        }
+        if (i === 0) return null;
+        const prev = arr[i - 1];
+        const range = c.high - c.low || 1;
+        const body = Math.abs(c.close - c.open);
+        const strongBody = body > range * 0.4;
+        const volumeValid = true;  // NIFTY index: volume unreliable
+        const vwapBull = c.vwap != null ? c.close > c.vwap : true;
+        const vwapBear = c.vwap != null ? c.close < c.vwap : true;
+        const dor = dailyOrN[dayKey(c.time)] || {};
+        const cOrh = dor.orh != null ? dor.orh : d.orh;
+        const cOrl = dor.orl != null ? dor.orl : d.orl;
+        const isBull = cOrh != null && prev.close <= cOrh && c.close > cOrh
+          && strongBody && volumeValid && vwapBull;
+        const isBear = cOrl != null && prev.close >= cOrl && c.close < cOrl
+          && strongBody && volumeValid && vwapBear;
+        if (isBull && c.time - lastBull > 3600) {
+          lastBull = c.time; lastBrk = {price: c.close, isBuy: true, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'belowBar', color: '#4ade80', shape: 'arrowUp', text: 'B'};
+        }
+        if (isBear && c.time - lastBear > 3600) {
+          lastBear = c.time; lastBrk = {price: c.close, isBuy: false, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'aboveBar', color: '#f87171', shape: 'arrowDown', text: 'S'};
+        }
+        return null;
+      }).filter(Boolean));
+      const orSizeFor = t => {
+        const dor = dailyOrN[dayKey(t)];
+        if (dor) return dor.orh - dor.orl;
+        return orSizeN;
+      };
+      // ATR trailing SL: buy -> candle low - 0.5*ATR, sell -> candle high + 0.5*ATR
+      const slFor = b => (b.atr != null)
+        ? (b.isBuy ? b.low - 0.5 * b.atr : b.high + 0.5 * b.atr)
+        : (orSizeFor(b.t) > 0 ? b.price - (b.isBuy ? 1 : -1) * orSizeFor(b.t) * 0.5 : null);
+      if (lastBrk) {
+        const slPx = slFor(lastBrk);
+        const lastClose = d.candles[d.candles.length - 1].close;
+        const slHit = slPx != null && (lastBrk.isBuy ? lastClose <= slPx : lastClose >= slPx);
+        const dorB = dailyOrN[dayKey(lastBrk.t)] || {};
+        const activeOrh = dorB.orh != null ? dorB.orh : d.orh;
+        const activeOrl = dorB.orl != null ? dorB.orl : d.orl;
+        if (slHit) clearTargetLines('nifty', niftySeries);
+        else plotBreakoutTargets('nifty', niftySeries, lastBrk.price, lastBrk.isBuy, orSizeFor(lastBrk.t), slPx, activeOrh, activeOrl);
+      } else clearTargetLines('nifty', niftySeries);
+      if (!niftyFitted) { niftyChart.timeScale().fitContent(); niftyFitted = true; }
+    }
+  } catch (e) {}
+}
+initNiftyChart();
+
+// ---- Stock charts (any symbol, candlesticks + B/S markers) ----------------
+const stockCharts = {
+  stk:  {chart: null, series: null, orh: null, orl: null, tf: '5', symbol: '', kind: 'EQ', fitted: false},
+  stk2: {chart: null, series: null, orh: null, orl: null, tf: '5', symbol: '', kind: 'EQ', fitted: false},
+};
+function setStf(key, tf, btn) {
+  const st = stockCharts[key];
+  st.tf = tf;
+  st.fitted = false;
+  btn.parentElement.querySelectorAll('[data-stf]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (st.symbol) refreshStockChart(key);
+}
+function loadStockChart(key) {
+  const p = key === 'stk2' ? '2' : '';
+  const sym = document.getElementById('stk' + p + '-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('stk' + p + '-kind').value;
+  if (!sym) return;
+  const st = stockCharts[key];
+  st.symbol = sym; st.kind = kind;
+  refreshStockChart(key);
+}
+async function refreshStockChart(key) {
+  const st = stockCharts[key];
+  if (!st || !st.symbol) return;
+  if (!st.series) {
+    if (typeof LightweightCharts === 'undefined') { setTimeout(() => refreshStockChart(key), 1000); return; }
+    const elId = key === 'stk2' ? 'stk2-chart' : 'stk-chart';
+    st.chart = LightweightCharts.createChart(document.getElementById(elId),
+      {layout:{background:{color:'#1e293b'},textColor:'#94a3b8'},
+       grid:{vertLines:{color:'#334155'},horzLines:{color:'#334155'}},
+       timeScale:{borderColor:'#334155',timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#334155'}});
+    st.series = st.chart.addCandlestickSeries({
+      upColor:'#4ade80',downColor:'#f87171',borderUpColor:'#4ade80',
+      borderDownColor:'#f87171',wickUpColor:'#4ade80',wickDownColor:'#f87171'});
+    st.orh = st.series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORH'});
+    st.orl = st.series.createPriceLine({color:'#38bdf8',lineWidth:1,lineStyle:2,title:'ORL'});
+    const stkLine = st.chart.addLineSeries({color:'#818cf8',lineWidth:2,visible:false});
+    chartSeries[key] = {candle: st.series, line: stkLine, type: 'candles'};
+  }
+  try {
+    const iv = st.tf === 'D' ? '1d' : st.tf + 'm';
+    const d = await (await fetch(`/api/chart?symbol=${st.symbol}&kind=${st.kind}&interval=${iv}`)).json();
+    if (d.candles && d.candles.length) {
+      const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
+      d.candles = d.candles.filter(c => c.time >= cutoff);
+      st.series.setData(d.candles);
+      if (chartSeries[key] && chartSeries[key].line)
+        chartSeries[key].line.setData(d.candles.map(c => ({time: c.time, value: c.close})));
+      const isDailyS = st.tf === 'D';
+      st.orh.applyOptions({visible: !isDailyS});
+      st.orl.applyOptions({visible: !isDailyS});
+      if (d.orh != null && !isDailyS) st.orh.applyOptions({price: d.orh});
+      if (d.orl != null && !isDailyS) st.orl.applyOptions({price: d.orl});
+      const orbMap = {};
+      (d.orb_markers || []).forEach(m => { orbMap[m.time] = m.side; });
+      const avgVolS = d.candles.slice(-21, -1).reduce((a, c) => a + (c.volume || 0), 0)
+        / Math.max(1, Math.min(20, d.candles.length - 1));
+      const tfMinBaseS = st.tf === '60' ? 60 : st.tf === 'D' ? 1 : parseInt(st.tf) || 5;
+      let lastBullS = 0, lastBearS = 0, lastBrkS = null;
+      const orSizeS = (d.orh != null && d.orl != null) ? d.orh - d.orl : 0;
+      const dailyOrS = d.daily_or || {};
+      const dayKeyS = t => new Date(t * 1000).toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+      st.series.setMarkers(d.candles.slice(-120).map((c, i, arr) => {
+        const orb = orbMap[c.time];
+        if (orb) {
+          const isBuy = orb === 'B';
+          lastBrkS = {price: c.close, isBuy, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: isBuy ? 'belowBar' : 'aboveBar',
+                  color: isBuy ? '#4ade80' : '#f87171',
+                  shape: isBuy ? 'arrowUp' : 'arrowDown',
+                  text: isBuy ? 'ORB B' : 'ORB S'};
+        }
+        if (i === 0) return null;
+        const prev = arr[i - 1];
+        const range = c.high - c.low || 1;
+        const body = Math.abs(c.close - c.open);
+        const strongBody = body > range * 0.4;
+        const volumeValidS = st.kind === 'INDEX' || avgVolS <= 0
+          || (c.volume || 0) / tfMinBaseS > (avgVolS / tfMinBaseS) * 1.2;
+        const vwapBullS = c.vwap != null ? c.close > c.vwap : true;
+        const vwapBearS = c.vwap != null ? c.close < c.vwap : true;
+        const dorS = dailyOrS[dayKeyS(c.time)] || {};
+        const cOrhS = dorS.orh != null ? dorS.orh : d.orh;
+        const cOrlS = dorS.orl != null ? dorS.orl : d.orl;
+        const isBull = cOrhS != null && prev.close <= cOrhS && c.close > cOrhS
+          && strongBody && volumeValidS && vwapBullS;
+        const isBear = cOrlS != null && prev.close >= cOrlS && c.close < cOrlS
+          && strongBody && volumeValidS && vwapBearS;
+        if (isBull && c.time - lastBullS > 3600) {
+          lastBullS = c.time; lastBrkS = {price: c.close, isBuy: true, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'belowBar', color: '#4ade80', shape: 'arrowUp', text: 'B'};
+        }
+        if (isBear && c.time - lastBearS > 3600) {
+          lastBearS = c.time; lastBrkS = {price: c.close, isBuy: false, t: c.time, low: c.low, high: c.high, atr: c.atr};
+          return {time: c.time, position: 'aboveBar', color: '#f87171', shape: 'arrowDown', text: 'S'};
+        }
+        return null;
+      }).filter(Boolean));
+      const orSizeForS = t => {
+        const dor = dailyOrS[dayKeyS(t)];
+        if (dor) return dor.orh - dor.orl;
+        return orSizeS;
+      };
+      const slForS = b => (b.atr != null)
+        ? (b.isBuy ? b.low - 0.5 * b.atr : b.high + 0.5 * b.atr)
+        : (orSizeForS(b.t) > 0 ? b.price - (b.isBuy ? 1 : -1) * orSizeForS(b.t) * 0.5 : null);
+      if (lastBrkS) {
+        const slPxS = slForS(lastBrkS);
+        const lastCloseS = d.candles[d.candles.length - 1].close;
+        const slHitS = slPxS != null && (lastBrkS.isBuy ? lastCloseS <= slPxS : lastCloseS >= slPxS);
+        const dorBS = dailyOrS[dayKeyS(lastBrkS.t)] || {};
+        const activeOrhS = dorBS.orh != null ? dorBS.orh : d.orh;
+        const activeOrlS = dorBS.orl != null ? dorBS.orl : d.orl;
+        if (slHitS) clearTargetLines(key, st.series);
+        else plotBreakoutTargets(key, st.series, lastBrkS.price, lastBrkS.isBuy, orSizeForS(lastBrkS.t), slPxS, activeOrhS, activeOrlS);
+      } else clearTargetLines(key, st.series);
+      if (!st.fitted) { st.chart.timeScale().fitContent(); st.fitted = true; }
+    }
+  } catch (e) {}
+}
+setInterval(() => { refreshStockChart('stk'); refreshStockChart('stk2'); }, 60000);
+
+// ---- Trend & momentum quick check ----------------------------------------
+async function checkSymbol() {
+  const sym = document.getElementById('check-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('check-kind').value;
+  if (sym) showCheck(sym, kind);
+}
+
+async function showCheck(sym, kind) {
+  const out = document.getElementById('check-result');
+  out.innerHTML = '<div class="meta" style="color:#94a3b8">Analyzing…</div>';
+  try {
+    const res = await fetch(`/api/check?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
+    const d = await res.json();
+    if (!res.ok) { out.innerHTML = `<div class="meta" style="color:#f87171">${d.detail || 'Check failed'}</div>`; return; }
+    const t = d.technicals || {};
+    out.innerHTML = `<div class="pick-card" style="max-width:520px">
+      <h3>${d.symbol} <span class="badge">${d.kind}</span></h3>
+      <div class="score">${d.trend_bias} · Confidence ${d.confidence}% · Momentum ${d.momentum_score}/100</div>
+      <div class="ltp">${fmtInr(d.quote && d.quote.ltp)}</div>
+      <div class="meta">Day ${d.quote && d.quote.change_pct != null ? sgn(d.quote.change_pct) + d.quote.change_pct.toFixed(2) + '%' : '—'} ·
+        RSI ${t.rsi_14 != null ? t.rsi_14.toFixed(1) : '—'} ·
+        Vol ${t.volume_vs_20d_avg != null ? t.volume_vs_20d_avg + 'x' : '—'}<br>
+        EMA20 ${fmtInr(t.ema_20)} · EMA50 ${fmtInr(t.ema_50)} · 200SMA ${fmtInr(t.sma_200)}</div>
+    </div>`;
+  } catch (e) {
+    out.innerHTML = '<div class="meta" style="color:#f87171">Request failed</div>';
+  }
+}
+
+// ---- Momentum radar (broad multi-cap scan) --------------------------------
+function momRow(e) {
+  const biasCls = e.bias === 'BULLISH' ? 'up' : e.bias === 'BEARISH' ? 'down' : 'flat';
+  return `<div style="cursor:pointer" title="Click for detail" onclick="showCheck('${e.symbol}','EQ')"><span>${e.symbol}</span>
+    <span><span class="${biasCls}">${e.bias || ''}</span>
+    ${e.confidence != null ? ' · ' + e.confidence + '%' : ''}
+    · ${e.score} · ${fmtInr(e.cmp)}</span></div>`;
+}
+
+async function refreshMomPicks() {
+  try {
+    const res = await fetch('/api/momentum/picks');
+    const d = await res.json();
+    if (d.status !== 'ready' || !d.picks) {
+      document.getElementById('mom-top').innerHTML = '<div style="color:#64748b">Scanning…</div>';
+      return;
+    }
+    document.getElementById('mom-top').innerHTML =
+      (d.picks.top5 || []).map(momRow).join('');
+    document.getElementById('mom-bottom').innerHTML =
+      (d.picks.bottom5 || []).map(momRow).join('');
+  } catch (e) {}
+}
+
+async function momScanStatus() {
+  try {
+    const res = await fetch('/api/momentum/scan/status');
+    const d = await res.json();
+    document.getElementById('mom-scan-status').textContent =
+      d.status === 'running' ? `Scanning all caps… ${d.progress || ''}` :
+      d.status === 'done' ? `Last scan: ${d.progress || ''} symbols` : '';
+    document.getElementById('mom-scan-btn').disabled = d.status === 'running';
+  } catch (e) {}
+}
+
+async function startMomScan() {
+  document.getElementById('mom-scan-btn').disabled = true;
+  await fetch('/api/momentum/scan', {method: 'POST'});
+  setInterval(momScanStatus, 3000);
+  momScanStatus();
+}
+
+// ---- Options desk ---------------------------------------------------------
+async function runOptions() {
+  const sym = document.getElementById('opt-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('opt-kind').value;
+  const statusEl = document.getElementById('opt-status');
+  const out = document.getElementById('opt-report');
+  if (!sym) return;
+  statusEl.textContent = 'Analyzing…';
+  out.innerHTML = '';
+  try {
+    const res = await fetch(`/api/options/analyze?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Analysis failed'; return; }
+    statusEl.textContent = '';
+    out.innerHTML = d.html;
+  } catch (e) {
+    statusEl.textContent = 'Request failed';
+  }
+}
+
+// ---- ORB / VWAP desk ------------------------------------------------------
+async function runOrb() {
+  const sym = document.getElementById('orb-sym').value.trim().toUpperCase();
+  const kind = document.getElementById('orb-kind').value;
+  const statusEl = document.getElementById('orb-status');
+  const out = document.getElementById('orb-report');
+  if (!sym) return;
+  statusEl.textContent = 'Analyzing…';
+  out.innerHTML = '';
+  try {
+    const res = await fetch(`/api/orb/analyze?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Analysis failed'; return; }
+    statusEl.textContent = '';
+    out.innerHTML = d.html;
+  } catch (e) {
+    statusEl.textContent = 'Request failed';
+  }
+}
+
+// ---- Credit Tracker (strike-aware pick log) --------------------------------
+async function loadCreditTracker() {
+  const statusEl = document.getElementById('ct-status');
+  const out = document.getElementById('ct-report');
+  statusEl.textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/credit_tracker');
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Load failed'; return; }
+    statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN');
+    const rows = d.picks || [];
+    if (!rows.length) {
+      out.innerHTML = '<p style="color:#94a3b8">No credit_tracker picks recorded yet — they appear during market hours (09:30–15:15 IST) when credit strategies fire.</p>';
+      return;
+    }
+    out.innerHTML = `<table><thead><tr>
+      <th>Date/Time</th><th>Strategy</th><th>Side</th><th>Symbol</th>
+      <th class="num">Entry</th><th class="num">Short</th><th class="num">Long</th>
+      <th class="num">Spot</th><th>Result</th></tr></thead><tbody>${rows.map(p => `
+      <tr><td>${p.date}${p.time ? ' ' + p.time : ''}</td>
+      <td>${p.strategy || '—'}</td><td>${p.side}</td><td>${p.symbol}</td>
+      <td class="num">${p.entry_price != null ? p.entry_price.toFixed(2) : '—'}</td>
+      <td class="num">${p.short_strike != null ? p.short_strike : '—'}</td>
+      <td class="num">${p.long_strike != null ? p.long_strike : '—'}</td>
+      <td class="num">${p.spot != null ? p.spot.toFixed(2) : '—'}</td>
+      <td style="color:${p.result === 'win' ? '#22c55e' : p.result === 'loss' ? '#ef4444' : '#94a3b8'}">${p.result_label || '—'}</td></tr>`).join('')}
+      </tbody></table>`;
+  } catch (e) { statusEl.textContent = 'Load failed: ' + e; }
+}
+
+// ---- Chart Reader (candlestick pattern screener) --------------------------
+async function runChartScan() {
+  const statusEl = document.getElementById('cr-status');
+  const out = document.getElementById('cr-report');
+  const q = `u=${document.getElementById('cr-uni').value}&tf=${document.getElementById('cr-tf').value}&g=${document.getElementById('cr-grp').value}&t=${document.getElementById('cr-thr').value}`;
+  statusEl.textContent = 'Scanning…';
+  try {
+    const res = await fetch('/api/chartreader/scan?' + q);
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Scan failed'; return; }
+    statusEl.textContent = 'Done ' + new Date().toLocaleTimeString('en-IN');
+    out.innerHTML = d.html;
+  } catch (e) { statusEl.textContent = 'Scan failed: ' + e; }
+}
+
+// ---- Credit desk (NIFTY only, auto-refresh) -------------------------------
+async function runCredit() {
+  const statusEl = document.getElementById('credit-status');
+  const out = document.getElementById('credit-report');
+  statusEl.textContent = 'Analyzing NIFTY…';
+  try {
+    const res = await fetch('/api/credit/analyze?symbol=NIFTY&kind=INDEX');
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Analysis failed'; return; }
+    statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN');
+    out.innerHTML = d.html;
+    const tracks = d.track || [];
+    if (tracks.length) {
+      out.innerHTML += `<table id="credit-strat" style="margin-top:.75rem">
+        <thead><tr>
+          <th>Strategy</th><th>Type</th><th class="num">Sell Strike</th><th class="num">Buy Strike</th>
+          <th class="num">Credit</th><th class="num">Target</th><th class="num">Stop (Underlying)</th><th></th>
+        </tr></thead>
+        <tbody>${tracks.map(t => `<tr>
+          <td>${t.strategy}</td>
+          <td>${t.opt_type === 'CE' ? 'Call (CE)' : 'Put (PE)'}</td>
+          <td class="num">${fmtInr(t.short_strike)}</td>
+          <td class="num">${fmtInr(t.long_strike)}</td>
+          <td class="num">₹${t.entry_credit}</td>
+          <td class="num">₹${t.target}</td>
+          <td class="num">${t.stop_loss != null ? fmtInr(t.stop_loss) : '—'}</td>
+          <td><button class="scan-btn" onclick='trackCredit(${JSON.stringify(t)})'>+ Add</button></td>
+        </tr>`).join('')}</tbody>
+      </table>
+      <div class="meta" style="font-size:.75rem;color:#64748b;margin-top:.4rem">Credits &amp; levels are estimates — verify on NSE option chain.</div>`;
+    }
+  } catch (e) {
+    statusEl.textContent = 'Request failed';
+  }
+}
+
+async function trackCredit(t) {
+  await fetch('/api/trades', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(t),
+  });
+  refreshPerf(true);
+}
+runCredit();
+setInterval(runCredit, 300000);
+
+// ---- Agent performance ----------------------------------------------------
+async function refreshPerf(force) {
+  try {
+    const res = await fetch('/api/performance' + (force ? '?refresh=1' : ''));
+    const d = await res.json();
+    const stats = d.stats || {};
+    const cell = (label, val, color) =>
+      `<div class="perf-stat"><div class="label">${label}</div>
+       <div class="value" style="color:${color || '#e2e8f0'}">${val}</div></div>`;
+    const perfCells = o =>
+      cell('Total Picks', o.picks ?? '—') +
+      cell('Win Rate', o.win_rate != null ? o.win_rate + '%' : '—', o.win_rate >= 50 ? '#4ade80' : '#f87171') +
+      cell('Avg Return', o.avg_return != null ? sgn(o.avg_return) + o.avg_return + '%' : '—', cls(o.avg_return)) +
+      cell('Best', o.best != null ? '+' + o.best + '%' : '—', '#4ade80') +
+      cell('Worst', o.worst != null ? o.worst + '%' : '—', '#f87171');
+
+    // today-only stats for the dashboard widget (IST)
+    const today = new Date().toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+    const tRows = (d.rows || []).filter(r => r.date === today);
+    const rets = tRows.map(r => r.return_pct).filter(x => x != null);
+    const avg = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : null;
+    const dashEl = document.getElementById('dash-perf');
+    if (dashEl) dashEl.innerHTML = perfCells({
+      picks: tRows.length,
+      win_rate: rets.length ? Math.round(100 * rets.filter(x => x > 0).length / rets.length) : null,
+      avg_return: avg != null ? Math.round(avg * 100) / 100 : null,
+      best: rets.length ? Math.max(...rets) : null,
+      worst: rets.length ? Math.min(...rets) : null,
+    });
+    const dashRows = document.getElementById('dash-perf-rows');
+    if (dashRows) dashRows.innerHTML = tRows.map(r => `<tr>
+      <td>${r.date} ${r.time || ''}</td>
+      <td>${r.source}</td>
+      <td>${r.side}</td>
+      <td>${r.symbol}</td>
+      <td class="num">${r.entry != null ? fmtInr(r.entry) : '—'}</td>
+      <td class="num">${r.current != null ? fmtInr(r.current) : '—'}</td>
+      <td class="num ${cls(r.return_pct)}">${r.return_pct != null ? sgn(r.return_pct) + r.return_pct + '%' : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:#64748b">No picks yet today</td></tr>';
+
+    // Performance tab: all-time stats
+    const o = stats.overall || {};
+    document.getElementById('perf-stats').innerHTML = perfCells(o);
+
+    // Per-agent cards with description + track record
+    const AGENTS = [
+      {key: 'quotes',  name: 'Market Watch',      desc: 'Real-time LTP/quote feed for your watchlist (Yahoo delayed / Groww live).', src: null},
+      {key: 'analyst', name: 'Equity Analyst',    desc: '7-phase momentum report: news scan, technicals, targets, option strategy.', src: null},
+      {key: 'nifty',   name: 'NIFTY 50 Scanner',  desc: 'Daily momentum scan of all 50 NIFTY constituents; picks top bullish/bearish.', src: 'nifty'},
+      {key: 'active',  name: 'Active Stocks',     desc: 'Momentum scan of ~100 liquid NSE large/mid caps.', src: 'active'},
+      {key: 'momentum',name: 'Momentum Radar',    desc: 'Broad ~180-symbol multi-cap scan (small/mid/large) with trend bias + confidence.', src: 'momentum'},
+      {key: 'credit',  name: 'Credit Desk',       desc: 'Intraday defined-risk credit strategies (spreads/condors) with regime, VIX & time-window filters.', src: 'credit'},
+      {key: 'credit_tracker', name: 'Credit Tracker', desc: 'Strike-aware tracking of credit spreads & iron condors — records short/long strikes for outcome scoring.', src: 'credit_tracker'},
+    ];
+    const bySrc = stats.by_source || {};
+    document.getElementById('agent-cards').innerHTML = AGENTS.map(a => {
+      const st = a.src ? (bySrc[a.src] || {}) : {};
+      const perf = a.src
+        ? (st.scored
+            ? `Picks ${st.picks} · Win ${st.win_rate}% · Avg ${sgn(st.avg_return)}${st.avg_return}%`
+            : 'No scored picks yet')
+        : 'Data feed — no picks';
+      const color = st.avg_return == null ? '#94a3b8' : cls(st.avg_return);
+      return `<div class="pick-card"><h3 style="font-size:.95rem">${a.name}</h3>
+        <div class="score" style="color:${color};font-weight:600">${perf}</div>
+        <div class="meta" style="margin-top:.3rem">${a.desc}</div></div>`;
+    }).join('');
+    const rows = document.getElementById('perf-rows');
+    rows.innerHTML = (d.rows || []).map(r => `<tr>
+      <td>${r.date} ${r.time || ''}${r.is_today ? '<span class="today-tag">today</span>' : ''}</td>
+      <td>${r.source}</td>
+      <td>${r.side}</td>
+      <td>${r.symbol}</td>
+      <td class="num">${r.entry != null ? fmtInr(r.entry) : '—'}</td>
+      <td class="num">${r.current != null ? fmtInr(r.current) : '—'}</td>
+      <td class="num ${cls(r.return_pct)}">${r.return_pct != null ? sgn(r.return_pct) + r.return_pct + '%' : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:#64748b">No picks recorded yet</td></tr>';
+    // Per-agent performance table + improvement tuning (agent_tuning.json)
+    const srcStats = stats.by_source || {};
+    const agentRows = Object.entries(srcStats).map(([src, s]) => `<tr>
+      <td>${src}</td><td class="num">${s.picks ?? '—'}</td><td class="num">${s.scored ?? '—'}</td>
+      <td class="num">${s.win_rate != null ? s.win_rate + '%' : '—'}</td>
+      <td class="num ${cls(s.avg_return)}">${s.avg_return != null ? sgn(s.avg_return) + s.avg_return + '%' : '—'}</td>
+      <td class="num ${cls(s.best)}">${s.best != null ? '+' + s.best + '%' : '—'}</td>
+      <td class="num ${cls(s.worst)}">${s.worst != null ? s.worst + '%' : '—'}</td>
+    </tr>`).join('');
+    const tuning = d.tuning || {};
+    const tuningRows = Object.entries(tuning).map(([k, v]) =>
+      `<tr><td>${k}</td><td>${typeof v === 'boolean' ? (v ? 'ON' : 'OFF') : v}</td></tr>`).join('');
+    document.getElementById('outcome-stats').innerHTML = `
+      <table id="agent-perf-table"><thead><tr>
+        <th>Agent</th><th class="num">Picks</th><th class="num">Scored</th>
+        <th class="num">Win%</th><th class="num">Avg</th><th class="num">Best</th><th class="num">Worst</th>
+      </tr></thead><tbody>${agentRows || '<tr><td colspan="7" style="color:#64748b">No scored picks yet</td></tr>'}</tbody></table>
+      <div class="mini-list" style="margin-top:.75rem;border-left:3px solid #38bdf8">
+        <h4>Active Tuning <span class="meta" style="font-size:.72rem;color:#64748b">agent_tuning.json — applied on next scan</span></h4>
+        ${tuningRows ? `<table style="width:100%;font-size:.85rem"><tbody>${tuningRows}</tbody></table>`
+          : '<div class="meta" style="color:#64748b">No tuning params set — default thresholds in use.</div>'}
+      </div>`;
+
+    const opt = d.optimizer || {};
+    const findings = opt.findings || [];
+    document.getElementById('optimizer').innerHTML = findings.length
+      ? `<div class="mini-list" style="border-left:3px solid #f59e0b">
+           <h4>Optimizer Suggestions</h4>
+           ${findings.map(f => `<div style="display:block;padding:.3rem 0">• ${f}</div>`).join('')}
+         </div>`
+      : '';
+
+    // Manual trades
+    const trs = document.getElementById('trade-rows');
+    if (trs) trs.innerHTML = (d.trades || []).map(t => {
+      const stCls = t.status === 'TARGET HIT' ? 'up' : t.status === 'STOPPED' ? 'down' : 'flat';
+      const typeLbl = t.asset_type === 'OPTION'
+        ? `${t.opt_type} ${t.strike} ${t.expiry || ''}` : `${t.kind} ${t.side}`;
+      return `<tr>
+        <td>${t.symbol}${t.asset_type === 'OPTION' ? ' <span style="color:#94a3b8;font-size:.72rem">(' + (t.underlying||'') + ')</span>' : ''}</td>
+        <td style="font-size:.78rem">${typeLbl}</td>
+        <td class="num">${fmtInr(t.entry_price)}</td>
+        <td class="num">${t.current != null ? fmtInr(t.current) : '—'}</td>
+        <td class="num">${t.target != null ? fmtInr(t.target) : '—'}</td>
+        <td class="num">${t.stop_loss != null ? fmtInr(t.stop_loss) : '—'}</td>
+        <td class="num ${cls(t.pnl_pct)}">${t.pnl_pct != null ? sgn(t.pnl_pct) + t.pnl_pct + '%' : '—'}</td>
+        <td class="${stCls}">${t.status}</td>
+        <td><button class="del-btn" onclick="delTrade('${t.id}')">✕</button></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="9" style="color:#64748b">No tracked trades — add one above</td></tr>';
+  } catch (e) {}
+}
+
+function trAssetChange() {
+  const isOpt = document.getElementById('tr-asset').value === 'OPTION';
+  document.getElementById('tr-opt-row').style.display = isOpt ? 'flex' : 'none';
+  document.getElementById('tr-side').style.display = isOpt ? 'none' : '';
+  document.getElementById('tr-kind').style.display = isOpt ? 'none' : '';
+}
+
+async function addTrade() {
+  const isOpt = document.getElementById('tr-asset').value === 'OPTION';
+  const payload = {
+    asset_type: document.getElementById('tr-asset').value,
+    symbol: document.getElementById('tr-sym').value.trim(),
+    kind: document.getElementById('tr-kind').value,
+    side: document.getElementById('tr-side').value,
+    entry_price: document.getElementById('tr-entry').value,
+    target: document.getElementById('tr-target').value || null,
+    stop_loss: document.getElementById('tr-sl').value || null,
+  };
+  if (isOpt) {
+    payload.underlying = payload.symbol;
+    payload.expiry = document.getElementById('tr-expiry').value || null;
+    payload.strike = document.getElementById('tr-strike').value;
+    payload.opt_type = document.getElementById('tr-opttype').value;
+    if (!payload.strike) return;
+  }
+  if (!payload.symbol || !payload.entry_price) return;
+  await fetch('/api/trades', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+  ['tr-sym','tr-entry','tr-target','tr-sl','tr-expiry','tr-strike'].forEach(id => document.getElementById(id).value = '');
+  refreshPerf(true);
+}
+
+async function delTrade(id) {
+  await fetch('/api/trades/' + id, {method: 'DELETE'});
+  refreshPerf(true);
+}
+
+tick();
+setInterval(tick, REFRESH_MS);
+pollAnalysis();  // show last generated report (if any) on page load
+refreshPicks();
+setInterval(refreshPicks, 15000);
+scanStatus();
+refreshActivePicks();
+setInterval(refreshActivePicks, 15000);
+activeScanStatus();
+refreshPerf();
+setInterval(refreshPerf, 30000);
+refreshMomPicks();
+setInterval(refreshMomPicks, 20000);
+momScanStatus();
+</script>
+</body>
+</html>

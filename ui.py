@@ -159,6 +159,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <button class="tab-btn" onclick="switchTab('options', this)">Options Desk</button>
     <button class="tab-btn" onclick="switchTab('orb', this)">ORB / VWAP</button>
     <button class="tab-btn" onclick="switchTab('credit', this)">Credit Desk</button>
+    <button class="tab-btn" onclick="switchTab('credittracker', this)">Credit Tracker</button>
     <button class="tab-btn" onclick="switchTab('chartreader', this)">Chart Reader</button>
     <button class="tab-btn" onclick="switchTab('perf', this)">Performance</button>
   </div>
@@ -417,6 +418,17 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="credit-report"></div>
   </div>
   </div><!-- /pane-credit -->
+
+  <div class="tab-pane" id="pane-credittracker">
+  <div class="analyst">
+    <h2>Credit Tracker — Strike-Aware Pick Log
+      <button class="scan-btn" onclick="loadCreditTracker()">Refresh</button>
+    </h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">Recorded credit spreads &amp; iron condors with short/long strikes, scored win/loss against live spot. Source: <b>credit_tracker</b>.</div>
+    <div id="ct-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="ct-report"></div>
+  </div>
+  </div><!-- /pane-credittracker -->
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script>
@@ -1055,6 +1067,36 @@ async function runOrb() {
   } catch (e) {
     statusEl.textContent = 'Request failed';
   }
+}
+
+// ---- Credit Tracker (strike-aware pick log) --------------------------------
+async function loadCreditTracker() {
+  const statusEl = document.getElementById('ct-status');
+  const out = document.getElementById('ct-report');
+  statusEl.textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/credit_tracker');
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Load failed'; return; }
+    statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN');
+    const rows = d.picks || [];
+    if (!rows.length) {
+      out.innerHTML = '<p style="color:#94a3b8">No credit_tracker picks recorded yet — they appear during market hours (09:30–15:15 IST) when credit strategies fire.</p>';
+      return;
+    }
+    out.innerHTML = `<table><thead><tr>
+      <th>Date/Time</th><th>Strategy</th><th>Side</th><th>Symbol</th>
+      <th class="num">Entry</th><th class="num">Short</th><th class="num">Long</th>
+      <th class="num">Spot</th><th>Result</th></tr></thead><tbody>${rows.map(p => `
+      <tr><td>${p.date}${p.time ? ' ' + p.time : ''}</td>
+      <td>${p.strategy || '—'}</td><td>${p.side}</td><td>${p.symbol}</td>
+      <td class="num">${p.entry_price != null ? p.entry_price.toFixed(2) : '—'}</td>
+      <td class="num">${p.short_strike != null ? p.short_strike : '—'}</td>
+      <td class="num">${p.long_strike != null ? p.long_strike : '—'}</td>
+      <td class="num">${p.spot != null ? p.spot.toFixed(2) : '—'}</td>
+      <td style="color:${p.result === 'win' ? '#22c55e' : p.result === 'loss' ? '#ef4444' : '#94a3b8'}">${p.result_label || '—'}</td></tr>`).join('')}
+      </tbody></table>`;
+  } catch (e) { statusEl.textContent = 'Load failed: ' + e; }
 }
 
 // ---- Chart Reader (candlestick pattern screener) --------------------------
@@ -1699,12 +1741,66 @@ def create_app(
         logger = logging.getLogger("market_watch")
         try:
             data = analyze_credit(symbol, kind, logger)
+            # feed the standalone Credit Tracker (does not modify credit_agent)
+            try:
+                import yfinance as yf
+                from credit_tracker import record_iron_condor, record_spread
+                tracks = data.get("track") or []
+                if tracks:
+                    tk = "^NSEI" if symbol.upper() in {"NIFTY", "NIFTY 50"} else f"{symbol}.NS"
+                    spot = float(yf.Ticker(tk).fast_info.last_price)
+                    ic = [t for t in tracks if "Iron Condor" in (t.get("strategy") or "")]
+                    if ic:
+                        put_t = next((t for t in ic if t.get("opt_type") == "PE"), ic[0])
+                        call_t = next((t for t in ic if t.get("opt_type") == "CE"), ic[-1])
+                        record_iron_condor(
+                            symbol, spot,
+                            put_t.get("short_strike"), put_t.get("long_strike"),
+                            call_t.get("short_strike"), call_t.get("long_strike"),
+                        )
+                    else:
+                        t = tracks[0]
+                        direction = "bull_put" if t.get("opt_type") == "PE" else "bear_call"
+                        record_spread(symbol, direction, spot,
+                                      t.get("short_strike"), t.get("long_strike"))
+            except Exception as exc:
+                logger.warning("credit_tracker record failed: %s", exc)
             return {
                 "html": markdown.markdown(
                     data["markdown"], extensions=["tables", "fenced_code", "nl2br"]
                 ),
                 "track": data.get("track", []),
             }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------------
+    # Credit Tracker — strike-aware pick log
+    # ------------------------------------------------------------------
+    @app.get("/api/credit_tracker")
+    async def credit_tracker_picks() -> dict:
+        from credit_tracker import evaluate_credit_outcome
+        from pick_history import load_history
+
+        try:
+            import yfinance as yf
+            picks = []
+            for h in reversed(load_history()):
+                if h.get("source") != "credit_tracker":
+                    continue
+                sym = h.get("symbol", "")
+                spot = None
+                try:
+                    ticker = "^NSEI" if sym.upper() in {"NIFTY", "NIFTY 50"} else f"{sym}.NS"
+                    spot = float(yf.Ticker(ticker).fast_info.last_price)
+                except Exception:
+                    pass
+                score, status = (evaluate_credit_outcome(h, spot)
+                                 if spot else (None, "no-price"))
+                picks.append({**h, "spot": spot, "score": score,
+                              "result": "win" if score == 1.0 else ("loss" if score == -1.0 else status),
+                              "result_label": status if status != "active" else f"{score}%"})
+            return {"picks": picks[:200]}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
