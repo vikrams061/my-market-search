@@ -1,8 +1,8 @@
-"""Intraday ORB + VWAP Momentum Agent.
+"""Intraday ORB + VWAP Momentum Agent (Multi-Index Support: Nifty, Bank Nifty, Finnifty, Midcap Nifty).
 
 Frameworks implemented:
 1. INTRADAY (primary): Session VWAP trend filter + 15-minute Opening Range
-   Breakout (ORH/ORL) with Relative Volume > 1.5x -> ATM/ITM option spread.
+   Breakout (ORH/ORL) + Relative Volume > 1.5x + 15m RSI Confirmation -> ATM/ITM option spread.
 2. SWING (fallback): RSI(14) + EMA20/50 trend filter -> monthly vertical spread.
 
 Option premiums are ESTIMATES — verify on NSE option chain.
@@ -11,76 +11,134 @@ Option premiums are ESTIMATES — verify on NSE option chain.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import datetime, date
 from typing import Any, Optional
+import pytz
+import pandas as pd
+import yfinance as yf
 
 from agent import _ema, _rsi, _sma
-from options_agent import _next_monthly_expiry, _round_strike, _strike_step, bullish_side
+from options_agent import _next_monthly_expiry, _round_strike
+from config import Instrument
+
+
+def _calc_intraday_rsi(closes: pd.Series, period: int = 14) -> float:
+    """Compute RSI on intraday price series."""
+    if len(closes) < period + 1:
+        return 50.0
+    delta = closes.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    val = rsi.iloc[-1]
+    return float(val) if pd.notna(val) else 50.0
+
+
+def _get_dynamic_strike_step(symbol: str, price: float) -> int:
+    """Return correct NSE option strike step based on instrument type."""
+    sym = symbol.upper()
+    if "BANKNIFTY" in sym or sym == "^NSEBANK":
+        return 100
+    elif "FINNIFTY" in sym or sym == "^CNXFIN":
+        return 50
+    elif "MIDCP" in sym or sym == "^CNXMID":
+        return 25
+    else:  # NIFTY / Equities
+        return 50 if price > 2000 else 10
 
 
 def _intraday_frame(tk: Any) -> dict:
-    """Compute VWAP, opening range, RVOL from 15m bars."""
+    """Compute VWAP, opening range, RVOL, and 15m RSI from 15m bars."""
     df = tk.history(period="5d", interval="15m", auto_adjust=False)
-    if df is None or df.empty or len(df) < 30:
+    if df is None or df.empty or len(df) < 10:
         return {}
 
-    # latest trading day only
-    today = df.index[-1].date()
-    day = df[df.index.date == today] if hasattr(df.index, "date") else df.tail(30)
+    # Convert to IST timezone for reliable daily slicing
+    ist = pytz.timezone("Asia/Kolkata")
+    if df.index.tz is not None:
+        df.index = df.index.tz_convert(ist)
+    else:
+        df.index = df.index.tz_localize("UTC").tz_convert(ist)
+
+    today = datetime.now(ist).date()
+    day = df[df.index.date == today]
     if day.empty:
-        day = df.tail(30)
+        latest_date = df.index.date[-1]
+        day = df[df.index.date == latest_date]
+
+    if day.empty or len(day) < 1:
+        return {}
 
     closes = day["Close"].dropna()
     if closes.empty:
         return {}
 
-    # session VWAP
-    if {"High", "Low", "Volume"}.issubset(day.columns):
+    # Session VWAP calculation
+    vwap = None
+    if {"High", "Low", "Close"}.issubset(day.columns):
         typical = (day["High"] + day["Low"] + day["Close"]) / 3
-        vol = day["Volume"].fillna(0)
-        vwap = float((typical * vol).sum() / vol.sum()) if vol.sum() else None
-    else:
-        vwap = None
+        if "Volume" in day.columns and day["Volume"].sum() > 0:
+            vol = day["Volume"].fillna(0)
+            vwap = float((typical * vol).sum() / vol.sum())
+        else:
+            vwap = float(typical.mean())
 
-    # opening range = first 15m bar of the session
+    # Opening range = first 15m bar
     or_bar = day.iloc[0]
     orh = float(or_bar["High"])
     orl = float(or_bar["Low"])
 
-    # RVOL: today's avg bar volume vs 20-bar avg volume of prior days
-    prior = df[df.index.date < today] if hasattr(df.index, "date") else df.iloc[:-len(day)]
-    avg_prior = float(prior["Volume"].tail(80).mean()) if len(prior) else None
+    # RVOL: today's cumulative volume vs expected cumulative at this point
+    # in the session (prior days' avg full-day volume x bars elapsed / 25).
+    # Returns None when volume data is absent/zero (e.g. indices on yfinance)
+    # so the RVOL gate is skipped rather than falsely failing.
+    prior = df[df.index.date < day.index[0].date()]
     rvol = None
-    if avg_prior:
-        today_vol = float(day["Volume"].sum())
-        bars_so_far = max(len(day), 1)
-        # project vs average per-bar volume
-        rvol = round(float(day["Volume"].mean()) / avg_prior, 2) if avg_prior else None
+    if "Volume" in day.columns and "Volume" in prior.columns:
+        day_vol = float(day["Volume"].fillna(0).sum())
+        prior_daily = prior.groupby(prior.index.date)["Volume"].sum()
+        avg_day_vol = float(prior_daily.mean()) if len(prior_daily) else 0.0
+        if day_vol > 0 and avg_day_vol > 0:
+            session_bars = 25  # 09:15–15:30 in 15m bars
+            frac = min(len(day) / session_bars, 1.0)
+            expected = avg_day_vol * frac
+            rvol = round(day_vol / expected, 2) if expected > 0 else None
 
     last = float(closes.iloc[-1])
+    rsi_15m = _calc_intraday_rsi(closes, 14)
+
+    # ORB Breakout status with strict boundary checks
+    breakout_status = "NONE"
+    if last > orh:
+        breakout_status = "BULL"
+    elif last < orl:
+        breakout_status = "BEAR"
+
     return {
-        "vwap": round(vwap, 2) if vwap else None,
+        "vwap": round(vwap, 2) if vwap else round(last, 2),
         "orh": round(orh, 2),
         "orl": round(orl, 2),
         "last": round(last, 2),
         "rvol": rvol,
-        "above_vwap": (last > vwap) if vwap else None,
-        "orb_breakout": "BULL" if last > orh else ("BEAR" if last < orl else "NONE"),
+        "rsi_15m": round(rsi_15m, 1),
+        "above_vwap": (last >= vwap) if vwap else True,
+        "orb_breakout": breakout_status,
         "bars": len(day),
     }
 
 
 def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
-    """ORB/VWAP intraday analysis with swing fallback (markdown)."""
-    import yfinance as yf
-
-    from config import Instrument
-
+    """ORB/VWAP intraday analysis with multi-index `idx_map` support and RSI confirmation."""
     inst = Instrument(symbol=symbol.upper(), kind=kind.upper())
+    
     idx_map = {
-        "NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^CNXFIN",
+        "NIFTY": "^NSEI", 
+        "BANKNIFTY": "^NSEBANK", 
+        "FINNIFTY": "^CNXFIN",
         "MIDCPNIFT": "^CNXMID",
     }
+    
     alias = {"HDFC": "HDFCBANK.NS"}.get(inst.symbol)
     ys = alias or (
         idx_map.get(inst.symbol, f"^{inst.symbol}")
@@ -89,14 +147,14 @@ def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
 
     tk = yf.Ticker(ys)
 
-    # --- intraday frame -------------------------------------------------------
+    # --- Intraday Frame ---
     intra = {}
     try:
         intra = _intraday_frame(tk)
     except Exception as exc:
         logger.debug("Intraday frame failed for %s: %s", symbol, exc)
 
-    # --- daily frame ----------------------------------------------------------
+    # --- Daily Frame ---
     hist = tk.history(period="6mo", interval="1d", auto_adjust=False)
     closes, volumes = [], []
     cmp_price = ema20 = ema50 = sma200 = rsi_now = None
@@ -121,34 +179,41 @@ def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
     if not price:
         raise RuntimeError(f"No price data for {symbol}")
 
-    # --- decision: intraday ORB first, swing fallback --------------------------
+    # --- Decision Engine: ORB + VWAP + 15m RSI Filter ---
     orb = intra.get("orb_breakout", "NONE")
-    rvol = intra.get("rvol")
-    above_vwap = intra.get("above_vwap")
+    rvol = intra.get("rvol", 1.0)
+    above_vwap = intra.get("above_vwap", True)
     vwap = intra.get("vwap")
     orh, orl = intra.get("orh"), intra.get("orl")
+    orh_txt = f"₹{orh:,.2f}" if orh is not None else "N/A"
+    orl_txt = f"₹{orl:,.2f}" if orl is not None else "N/A"
+    rsi_15m = intra.get("rsi_15m", 50.0)
+    rvol_txt = f"{rvol}x" if rvol is not None else "N/A"
 
+    # Intraday requires: Breakout + RVOL > 1.5 + VWAP alignment + RSI momentum confirmation (>55 for bull, <45 for bear)
     intraday_valid = (
         orb in {"BULL", "BEAR"}
         and (rvol is None or rvol > 1.5)
         and (above_vwap is not None and ((orb == "BULL") == above_vwap))
+        and ((orb == "BULL" and rsi_15m > 55.0) or (orb == "BEAR" and rsi_15m < 45.0))
     )
 
-    # swing RSI+EMA check (reuse simplified logic)
+    # Swing fallback check
     above_trend = bool(cmp_price and ema20 and ema50 and cmp_price > ema20 and cmp_price > ema50)
     below_trend = bool(cmp_price and ema20 and ema50 and cmp_price < ema20 and cmp_price < ema50)
     swing_bull = above_trend and rsi_now is not None and rsi_now < 60
     swing_bear = below_trend and rsi_now is not None and rsi_now > 40
 
-    # ---- levels ----------------------------------------------------------------
+    # --- Strike & Options Calculations (Dynamic Strike Step, 1.5% OTM Offset) ---
     def pct(v, p):
         return round(v * (1 + p), 2) if v else None
 
     expiry = _next_monthly_expiry()
-    step = _strike_step(price)
+    step = _get_dynamic_strike_step(inst.symbol, price)
     atm = _round_strike(price)
-    otm_offset = max(step, int(round(price * 0.02 / step) * step))
-    est_debit = round(price * 0.009, 2)
+    
+    otm_offset = max(step, int(round(price * 0.015 / step) * step))
+    est_debit = round(price * 0.008, 2)
     est_max = round(otm_offset - est_debit, 2)
     rr = round(est_max / est_debit, 2) if est_debit else None
 
@@ -157,17 +222,17 @@ def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
 
 ## 1. Market Catalyst & Structural Summary
 - **Price:** ₹{price:,.2f} | **VWAP:** {('₹' + format(vwap, ',.2f')) if vwap else 'N/A'} ({'above' if above_vwap else 'below' if above_vwap is False else 'N/A'})
-- **Trend:** {'above' if cmp_price and ema20 and cmp_price > ema20 else 'below' if cmp_price and ema20 else 'N/A'} EMA20, {'above' if cmp_price and ema50 and cmp_price > ema50 else 'below' if cmp_price and ema50 else 'N/A'} EMA50, {'above' if cmp_price and sma200 and cmp_price > sma200 else 'below' if cmp_price and sma200 else 'N/A'} 200SMA
-- **RSI(14):** {('%.1f' % rsi_now) if rsi_now is not None else 'N/A'} | **Volume:** {vol_ratio if vol_ratio else 'N/A'}x 20d avg (daily), RVOL {rvol if rvol else 'N/A'}x (intraday)
+- **Trend:** {'above' if cmp_price and ema20 and cmp_price > ema20 else 'below' if cmp_price and ema20 else 'N/A'} EMA20, {'above' if cmp_price and ema50 and cmp_price > ema50 else 'below' if cmp_price and ema50 else 'N/A'} EMA50
+- **RSI(14):** Daily {('%.1f' % rsi_now) if rsi_now is not None else 'N/A'} | **15m RSI:** {rsi_15m} | **RVOL:** {rvol_txt}
 - **Catalyst/Sentiment:** No news feed in this agent — check NSE announcements manually.
 
 ## 2. Technical Execution Bounds
-- **15m Opening Range:** ORH ₹{orh:,.2f} / ORL ₹{orl:,.2f} | **ORB status:** {orb}
+- **15m Opening Range:** ORH {orh_txt} / ORL {orl_txt} | **ORB status:** {orb}
 """
 
     if intraday_valid:
         bullish = orb == "BULL"
-        bias = "Bullish Long (ORB breakout)" if bullish else "Bearish Short (ORB breakdown)"
+        bias = "Bullish Long (ORB breakout + RSI confirmation)" if bullish else "Bearish Short (ORB breakdown + RSI confirmation)"
         long_k, short_k, opt = (atm, atm + otm_offset, "CE") if bullish else (atm, atm - otm_offset, "PE")
         t1 = pct(price, 0.008) if bullish else pct(price, -0.008)
         t2 = pct(price, 0.015) if bullish else pct(price, -0.015)
@@ -175,14 +240,14 @@ def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
         strat = "Bull Call Spread" if bullish else "Bear Put Spread"
         return header + f"""
 - **Directional Bias:** {bias}
-- **Entry Trigger Zone:** {'Breakout above ORH ₹' + format(orh, ',.2f') if bullish else 'Breakdown below ORL ₹' + format(orl, ',.2f')} with RVOL {rvol}x > 1.5
+- **Entry Trigger Zone:** {'Breakout above ORH ₹' + format(orh, ',.2f') if bullish else 'Breakdown below ORL ₹' + format(orl, ',.2f')} with RVOL {rvol_txt} (>1.5) and 15m RSI {rsi_15m}
 - **T1 (15–60 min):** ₹{t1:,.2f} | **T2 (1–3 sessions):** ₹{t2:,.2f}
 - **Strict Stop-Loss:** ₹{sl:,.2f} (opposite side of opening range)
 
 ## 3. Actionable Derivatives Strategy (Intraday)
-- **Strategy Type:** {strat} — ATM{'/ITM delta 0.50–0.65' if bullish else ' (ITM put, delta -0.50 to -0.65)'}
+- **Strategy Type:** {strat} (1.5% OTM Width)
 - **Strikes:** Buy {long_k} {opt} / Sell {short_k} {opt} ({expiry})
-- **Net Debit / Max Risk:** ~₹{est_debit:,.2f} *ESTIMATE* — verify on chain
+- **Net Debit / Max Risk:** ~₹{est_debit:,.2f} *ESTIMATE*
 - **Max Reward:** ~₹{est_max:,.2f} | **R:R:** ~1:{rr}
 - **Exit Rules:** Square off 50% at T1 or VWAP failure; hard exit if price closes back inside opening range
 """
@@ -195,30 +260,25 @@ def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
         t2 = pct(price, 0.09) if bullish else pct(price, -0.09)
         sl = swing_low or pct(price, -0.02) if bullish else swing_high or pct(price, 0.02)
         strat = "Bull Call Spread" if bullish else "Bear Put Spread"
-        trig = "RSI+EMA pullback/reclaim setup" if bullish else "RSI+EMA rejection/breakdown setup"
         return header + f"""
-- **Directional Bias:** {bias} — {'no intraday ORB trigger; swing setup active' if intraday_valid is False else ''}
-- **Entry Trigger Zone:** {trig} — enter on next session or VWAP reclaim
+- **Directional Bias:** {bias} — intraday ORB filter not met; swing setup active
+- **Entry Trigger Zone:** RSI+EMA pullback/reclaim setup
 - **T1 (2–4 sessions):** ₹{t1:,.2f} | **T2 (5–10 sessions):** ₹{t2:,.2f}
-- **Strict Stop-Loss:** ₹{sl:,.2f} (swing {'low' if bullish else 'high'})
+- **Strict Stop-Loss:** ₹{sl:,.2f}
 
 ## 3. Actionable Derivatives Strategy (Monthly Expiry)
-- **Strategy Type:** {strat}
+- **Strategy Type:** {strat} (1.5% OTM Width)
 - **Strikes:** Buy {long_k} {opt} / Sell {short_k} {opt} ({expiry})
 - **Net Debit / Max Risk:** ~₹{est_debit:,.2f} *ESTIMATE*
 - **Max Reward:** ~₹{est_max:,.2f} | **R:R:** ~1:{rr}
-- **Exit Rules:** 50% at T1, rest at T2/expiry; exit if underlying closes beyond SL
 """
 
-    # neutral / wait
-    up = swing_high or orh or pct(price, 0.01)
-    dn = swing_low or orl or pct(price, -0.01)
     return header + f"""
 - **Directional Bias:** NEUTRAL — Wait for Trigger
-- **ORB status:** {orb} — {'price above VWAP but RVOL ' + str(rvol) + 'x below 1.5x threshold' if orb == 'BULL' and above_vwap else ('price below VWAP' if orb == 'BEAR' else 'no opening-range break yet')}; needs VWAP agreement + RVOL > 1.5x to trigger
-- **Entry Trigger Zone:** Breakout above ₹{up:,.2f} or breakdown below ₹{dn:,.2f}
+- **ORB status:** {orb} — price {'above' if above_vwap else 'below'} VWAP, RVOL {rvol_txt}, 15m RSI {rsi_15m}; needs RVOL > 1.5x + 15m RSI confirmation (>55 / <45)
+- **Entry Trigger Zone:** Breakout above {orh_txt} or breakdown below {orl_txt}
 - **T1/T2/SL:** Recompute on trigger confirmation
 
 ## 3. Actionable Derivatives Strategy
-**NO TRADE** — no valid ORB+VWAP or RSI+EMA trigger. Wait for the levels above.
+**NO TRADE** — insufficient momentum or conflicting VWAP/RSI signals.
 """
