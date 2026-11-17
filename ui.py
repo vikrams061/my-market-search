@@ -159,6 +159,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <button class="tab-btn" onclick="switchTab('options', this)">Options Desk</button>
     <button class="tab-btn" onclick="switchTab('orb', this)">ORB / VWAP</button>
     <button class="tab-btn" onclick="switchTab('credit', this)">Credit Desk</button>
+    <button class="tab-btn" onclick="switchTab('chartreader', this)">Chart Reader</button>
     <button class="tab-btn" onclick="switchTab('perf', this)">Performance</button>
   </div>
 
@@ -354,6 +355,40 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="opt-report"></div>
   </div>
   </div><!-- /pane-options -->
+
+  <div class="tab-pane" id="pane-chartreader">
+  <div class="analyst">
+    <h2>Chart Reader — Candlestick Pattern Screener</h2>
+    <div class="meta" style="font-size:.8rem;color:#64748b;margin:-.4rem 0 .6rem">4-step setup: universe, timeframe, pattern group, min confidence. Scans completed candles only.</div>
+    <div class="controls">
+      <select id="cr-uni">
+        <option value="1A">1A · Nifty 50</option>
+        <option value="1B" selected>1B · Small + Midcap</option>
+        <option value="1C">1C · All Nifty (~100)</option>
+      </select>
+      <select id="cr-tf">
+        <option value="2A">2A · 5m</option>
+        <option value="2B" selected>2B · 15m</option>
+        <option value="2C">2C · 1h</option>
+        <option value="2D">2D · 1d</option>
+      </select>
+      <select id="cr-grp">
+        <option value="3A" selected>3A · All patterns</option>
+        <option value="3B">3B · Bullish reversal</option>
+        <option value="3C">3C · Bearish reversal</option>
+        <option value="3D">3D · Continuation</option>
+      </select>
+      <select id="cr-thr">
+        <option value="4A">4A · &gt;=75%</option>
+        <option value="4B" selected>4B · &gt;=80%</option>
+        <option value="4C">4C · &gt;=90%</option>
+      </select>
+      <button onclick="runChartScan()">Scan</button>
+    </div>
+    <div id="cr-status" style="font-size:.85rem;color:#94a3b8"></div>
+    <div id="cr-report"></div>
+  </div>
+  </div><!-- /pane-chartreader -->
 
   <div class="tab-pane" id="pane-orb">
   <div class="analyst">
@@ -1022,6 +1057,21 @@ async function runOrb() {
   }
 }
 
+// ---- Chart Reader (candlestick pattern screener) --------------------------
+async function runChartScan() {
+  const statusEl = document.getElementById('cr-status');
+  const out = document.getElementById('cr-report');
+  const q = `u=${document.getElementById('cr-uni').value}&tf=${document.getElementById('cr-tf').value}&g=${document.getElementById('cr-grp').value}&t=${document.getElementById('cr-thr').value}`;
+  statusEl.textContent = 'Scanning…';
+  try {
+    const res = await fetch('/api/chartreader/scan?' + q);
+    const d = await res.json();
+    if (!res.ok) { statusEl.textContent = d.detail || 'Scan failed'; return; }
+    statusEl.textContent = 'Done ' + new Date().toLocaleTimeString('en-IN');
+    out.innerHTML = d.html;
+  } catch (e) { statusEl.textContent = 'Scan failed: ' + e; }
+}
+
 // ---- Credit desk (NIFTY only, auto-refresh) -------------------------------
 async function runCredit() {
   const statusEl = document.getElementById('credit-status');
@@ -1655,6 +1705,22 @@ def create_app(
                 ),
                 "track": data.get("track", []),
             }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------------
+    # Chart Reader agent (candlestick pattern screener)
+    # ------------------------------------------------------------------
+    @app.get("/api/chartreader/scan")
+    async def chartreader_scan(u: str = "1B", tf: str = "2B", g: str = "3A", t: str = "4B") -> dict:
+        from chart_reader import PATTERN_GROUPS, THRESHOLDS, TIMEFRAMES, UNIVERSES, run_scan
+
+        if u not in UNIVERSES or tf not in TIMEFRAMES or g not in PATTERN_GROUPS or t not in THRESHOLDS:
+            raise HTTPException(status_code=400, detail="Invalid scan options")
+        logger = logging.getLogger("market_watch")
+        try:
+            md = run_scan(u, tf, PATTERN_GROUPS[g], THRESHOLDS[t], logger)
+            return {"html": markdown.markdown(md, extensions=["tables", "fenced_code", "nl2br"])}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
