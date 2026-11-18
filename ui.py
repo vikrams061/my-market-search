@@ -171,7 +171,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <table id="dash-perf-table" style="margin-top:.5rem">
       <thead><tr>
         <th>Date/Time</th><th>Agent</th><th>Side</th><th>Symbol</th>
-        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
+        <th class="num">Entry</th><th class="num">Target</th><th class="num">Current</th><th class="num">Return</th>
       </tr></thead>
       <tbody id="dash-perf-rows"></tbody>
     </table>
@@ -263,7 +263,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <table id="perf-table">
       <thead><tr>
         <th>Date</th><th>Agent</th><th>Side</th><th>Symbol</th>
-        <th class="num">Entry</th><th class="num">Current</th><th class="num">Return</th>
+        <th class="num">Entry</th><th class="num">Target</th><th class="num">Current</th><th class="num">Return</th>
       </tr></thead>
       <tbody id="perf-rows"></tbody>
     </table>
@@ -1196,9 +1196,10 @@ async function refreshPerf(force) {
       <td>${r.side}</td>
       <td>${r.symbol}</td>
       <td class="num">${r.entry != null ? fmtInr(r.entry) : '—'}</td>
+      <td class="num">${r.target != null ? fmtInr(r.target) : '—'}</td>
       <td class="num">${r.current != null ? fmtInr(r.current) : '—'}</td>
       <td class="num ${cls(r.return_pct)}">${r.return_pct != null ? sgn(r.return_pct) + r.return_pct + '%' : '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="7" style="color:#64748b">No picks yet today</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="8" style="color:#64748b">No picks yet today</td></tr>';
 
     // Performance tab: all-time stats
     const o = stats.overall || {};

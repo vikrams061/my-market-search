@@ -255,6 +255,13 @@ class PerformanceAgent:
                 side = h.get("side")
                 # neutral (Iron Condor) profits in flat markets -> penalize |move|
                 ret = round(-abs(raw) if side == "neutral" else (raw if side == "bullish" else -raw), 2)
+            # T1 target: stored on new rows; fallback to the scanner's 0.8% rule
+            target = h.get("target")
+            if target is None and entry:
+                if h.get("side") == "bullish":
+                    target = round(entry * 1.008, 2)
+                elif h.get("side") == "bearish":
+                    target = round(entry * 0.992, 2)
             rows.append({
                 "date": h.get("date"),
                 "time": h.get("time"),
@@ -262,6 +269,7 @@ class PerformanceAgent:
                 "side": h.get("side"),
                 "symbol": h.get("symbol"),
                 "entry": entry,
+                "target": target,
                 "current": cur,
                 "return_pct": ret,
                 "is_today": h.get("date") == today,

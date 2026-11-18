@@ -388,6 +388,7 @@ class NiftyScanner:
                     continue
                 key = (picks["date"], self._source, side)
                 entry_price = (p.get("quote") or {}).get("ltp") or (p.get("technicals") or {}).get("cmp")
+                tg = _trade_targets(p, side == "bullish") or {}
                 row = {
                     "date": picks["date"],
                     "time": picks.get("time"),
@@ -396,6 +397,8 @@ class NiftyScanner:
                     "symbol": p["symbol"],
                     "entry_price": entry_price,
                     "score": p.get("momentum_score"),
+                    "target": tg.get("t1"),
+                    "stop_loss": tg.get("sl"),
                 }
                 if key in existing:
                     # rescan changed the pick — keep history in sync with what's displayed
