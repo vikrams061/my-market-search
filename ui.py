@@ -166,7 +166,9 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div class="tab-pane active" id="pane-dashboard">
   <div class="analyst" style="margin-bottom:.75rem">
-    <h2>Today's Performance <span class="meta" style="font-size:.75rem;color:#64748b">IST · live mark-to-market</span></h2>
+    <h2>Today's Performance <span class="meta" style="font-size:.75rem;color:#64748b">IST · live mark-to-market</span>
+      <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
+      <span class="meta" id="dash-perf-updated" style="font-size:.75rem;color:#64748b"></span></h2>
     <div class="perf-grid" id="dash-perf"></div>
     <table id="dash-perf-table" style="margin-top:.5rem">
       <thead><tr>
@@ -257,12 +259,13 @@ INDEX_HTML = """<!DOCTYPE html>
   <div class="analyst">
     <h2>Agent Performance
       <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
+      <span class="meta" id="perf-updated" style="font-size:.75rem;color:#64748b"></span>
     </h2>
     <div id="agent-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;margin:.75rem 0"></div>
     <div class="perf-grid" id="perf-stats"></div>
     <table id="perf-table">
       <thead><tr>
-        <th>Date</th><th>Agent</th><th>Side</th><th>Symbol</th>
+<th>Date/Time</th><th>Agent</th><th>Side</th><th>Symbol</th>
         <th class="num">Entry</th><th class="num">Target</th><th class="num">Current</th><th class="num">Return</th>
       </tr></thead>
       <tbody id="perf-rows"></tbody>
@@ -1234,10 +1237,11 @@ async function refreshPerf(force) {
       <td>${r.source}</td>
       <td>${r.side}</td>
       <td>${r.symbol}</td>
-      <td class="num">${r.entry != null ? fmtInr(r.entry) : '—'}</td>
+<td class="num">${r.entry != null ? fmtInr(r.entry) : '—'}</td>
+      <td class="num">${r.target != null ? fmtInr(r.target) : '—'}</td>
       <td class="num">${r.current != null ? fmtInr(r.current) : '—'}</td>
       <td class="num ${cls(r.return_pct)}">${r.return_pct != null ? sgn(r.return_pct) + r.return_pct + '%' : '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="7" style="color:#64748b">No picks recorded yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="8" style="color:#64748b">No picks recorded yet</td></tr>';
     // Per-agent performance table + improvement tuning (agent_tuning.json)
     const srcStats = stats.by_source || {};
     const agentRows = Object.entries(srcStats).map(([src, s]) => `<tr>
