@@ -16,5 +16,7 @@ watchlist.json
 picks.json
 active_picks.json
 pick_history.json
+pick_outcomes.json
+trade_outcomes.json
 momentum_picks.json
 manual_trades.json

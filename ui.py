@@ -259,6 +259,7 @@ INDEX_HTML = """<!DOCTYPE html>
   <div class="analyst">
     <h2>Agent Performance
       <button class="scan-btn" onclick="refreshPerf(true)">Refresh</button>
+      <button class="scan-btn" onclick="runOptimizer(this)">Optimize</button>
       <span class="meta" id="perf-updated" style="font-size:.75rem;color:#64748b"></span>
     </h2>
     <div id="agent-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;margin:.75rem 0"></div>
@@ -1254,11 +1255,25 @@ async function refreshPerf(force) {
     const tuning = d.tuning || {};
     const tuningRows = Object.entries(tuning).map(([k, v]) =>
       `<tr><td>${k}</td><td>${typeof v === 'boolean' ? (v ? 'ON' : 'OFF') : v}</td></tr>`).join('');
+    const tsBySrc = (d.trade_stats || {}).by_source || {};
+    const tradeRows = Object.entries(tsBySrc).map(([src, s]) => s.n ? `<tr>
+      <td>${src}</td><td class="num">${s.n}</td>
+      <td class="num">${s.win_rate}%</td>
+      <td class="num">${s.wr_lower_95 != null ? s.wr_lower_95 + '%' : '—'}</td>
+      <td class="num ${cls(s.avg_ret)}">${s.avg_ret != null ? sgn(s.avg_ret) + s.avg_ret + '%' : '—'}</td>
+      <td class="num">${s.profit_factor != null ? s.profit_factor : '—'}</td>
+      <td class="num">${s.avg_mfe}%</td><td class="num">${s.avg_mae}%</td>
+    </tr>` : '').join('');
     document.getElementById('outcome-stats').innerHTML = `
       <table id="agent-perf-table"><thead><tr>
         <th>Agent</th><th class="num">Picks</th><th class="num">Scored</th>
         <th class="num">Win%</th><th class="num">Avg</th><th class="num">Best</th><th class="num">Worst</th>
       </tr></thead><tbody>${agentRows || '<tr><td colspan="7" style="color:#64748b">No scored picks yet</td></tr>'}</tbody></table>
+      <h4 style="margin:.9rem 0 .3rem;font-size:.8rem;color:#cbd5e1">Trade Replay — target/SL on 15m bars</h4>
+      <table id="agent-perf-table"><thead><tr>
+        <th>Agent</th><th class="num">Trades</th><th class="num">Win%</th><th class="num">WR floor 95%</th>
+        <th class="num">Avg</th><th class="num">PF</th><th class="num">MFE</th><th class="num">MAE</th>
+      </tr></thead><tbody>${tradeRows || '<tr><td colspan="8" style="color:#64748b">No replayed trades yet</td></tr>'}</tbody></table>
       <div class="mini-list" style="margin-top:.75rem;border-left:3px solid #38bdf8">
         <h4>Active Tuning <span class="meta" style="font-size:.72rem;color:#64748b">agent_tuning.json — applied on next scan</span></h4>
         ${tuningRows ? `<table style="width:100%;font-size:.85rem"><tbody>${tuningRows}</tbody></table>`
@@ -1266,13 +1281,7 @@ async function refreshPerf(force) {
       </div>`;
 
     const opt = d.optimizer || {};
-    const findings = opt.findings || [];
-    document.getElementById('optimizer').innerHTML = findings.length
-      ? `<div class="mini-list" style="border-left:3px solid #f59e0b">
-           <h4>Optimizer Suggestions</h4>
-           ${findings.map(f => `<div style="display:block;padding:.3rem 0">• ${f}</div>`).join('')}
-         </div>`
-      : '';
+    renderOptimizer(opt);
 
     // Manual trades
     const trs = document.getElementById('trade-rows');
@@ -1293,6 +1302,33 @@ async function refreshPerf(force) {
       </tr>`;
     }).join('') || '<tr><td colspan="9" style="color:#64748b">No tracked trades — add one above</td></tr>';
   } catch (e) {}
+}
+
+function renderOptimizer(opt) {
+  const findings = (opt && opt.findings) || [];
+  document.getElementById('optimizer').innerHTML = findings.length
+    ? `<div class="mini-list" style="border-left:3px solid #f59e0b">
+         <h4>Optimizer Suggestions</h4>
+         ${findings.map(f => `<div style="display:block;padding:.3rem 0">• ${f}</div>`).join('')}
+       </div>`
+    : '';
+}
+
+async function runOptimizer(btn) {
+  btn.disabled = true;
+  const el = document.getElementById('optimizer');
+  el.innerHTML = '<div class="mini-list" style="border-left:3px solid #f59e0b"><h4>Optimizer</h4><div>Analysing…</div></div>';
+  try {
+    const res = await fetch('/api/performance/optimize');
+    const d = await res.json();
+    if (!res.ok) { renderOptimizer({findings: [d.detail || 'Optimizer failed']}); return; }
+    renderOptimizer(d);
+    refreshPerf(true);  // pick up any tuning the optimizer wrote
+  } catch (e) {
+    renderOptimizer({findings: ['Optimizer request failed: ' + e]});
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function trAssetChange() {
@@ -1655,6 +1691,12 @@ def create_app(
         data = performance.report(force=refresh)
         data["optimizer"] = performance.suggestions()
         return data
+
+    @app.get("/api/performance/optimize")
+    async def run_optimizer() -> dict:
+        if performance is None:
+            raise HTTPException(status_code=503, detail="Performance agent not available")
+        return performance.suggestions(force=True)
 
     # ------------------------------------------------------------------
     # Momentum radar (broad multi-cap) endpoints

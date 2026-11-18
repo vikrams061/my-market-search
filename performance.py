@@ -19,10 +19,12 @@ from typing import Any, Optional
 
 PICK_HISTORY_FILE = "pick_history.json"
 OUTCOMES_FILE = "pick_outcomes.json"
+TRADE_OUTCOMES_FILE = "trade_outcomes.json"
 TUNING_FILE = "agent_tuning.json"
 TRADES_FILE = "manual_trades.json"
 CACHE_TTL_SECONDS = 120  # refresh prices every 2 min; UI polls every 30s
 OUTCOME_HORIZONS = (0, 1)  # T+0 = pick-day close, T+1 = next trading day close
+MIN_TRADE_SAMPLE = 8  # min evaluated trades before an agent is judged
 
 
 class ManualTradeTracker:
@@ -230,6 +232,10 @@ class PerformanceAgent:
                 self.score_pending()
             except Exception as exc:
                 self._logger.warning("Outcome scoring failed: %s", exc)
+            try:
+                self.evaluate_trades()
+            except Exception as exc:
+                self._logger.warning("Trade evaluation failed: %s", exc)
         try:
             history = json.loads(open(PICK_HISTORY_FILE, encoding="utf-8").read())
         except Exception:
@@ -277,6 +283,7 @@ class PerformanceAgent:
 
         stats = self._stats(rows)
         outcomes = self._outcome_rows()
+        trade_stats = self._trade_stats()
         try:
             tuning = json.loads(open(TUNING_FILE, encoding="utf-8").read())
         except Exception:
@@ -287,6 +294,7 @@ class PerformanceAgent:
             "stats": stats,
             "tuning": tuning,
             "outcome_stats": self._outcome_stats(outcomes),
+            "trade_stats": trade_stats,
             "outcomes": sorted(outcomes, key=lambda r: r.get("exit_date") or "", reverse=True)[:50],
             "rows": sorted(rows, key=lambda r: r.get("date") or "", reverse=True)[:40],
             "trades": trades,
@@ -409,6 +417,80 @@ class PerformanceAgent:
             self._logger.info("Scored %d pick outcomes.", len(new_rows))
         return len(new_rows)
 
+    # ------------------------------------------------------------------
+    # Trade-replay outcomes (trade_eval.py → trade_outcomes.json)
+    # ------------------------------------------------------------------
+    def evaluate_trades(self) -> int:
+        """Replay unscored picks against their target/SL on 15m bars.
+
+        Only runs for fully-closed sessions; each pick is evaluated once.
+        Returns the number of new outcome rows written.
+        """
+        import trade_eval
+
+        try:
+            history = json.loads(open(PICK_HISTORY_FILE, encoding="utf-8").read())
+        except Exception:
+            return 0
+        outcomes = trade_eval.load_outcomes()
+        done = {trade_eval.outcome_key(o) for o in outcomes}
+        new_rows = trade_eval.evaluate_pending(
+            history, done, self._market_closed(), date.today(), self._logger,
+        )
+        if new_rows:
+            outcomes.extend(new_rows)
+            trade_eval.save_outcomes(outcomes)
+        return len(new_rows)
+
+    @staticmethod
+    def _wilson_lower(wins: int, n: int, z: float = 1.96) -> Optional[float]:
+        """Wilson score lower bound for a binomial proportion (95%)."""
+        if n == 0:
+            return None
+        p = wins / n
+        denom = 1 + z * z / n
+        centre = p + z * z / (2 * n)
+        margin = z * ((p * (1 - p) + z * z / (4 * n)) / n) ** 0.5
+        return round(max(0.0, (centre - margin) / denom) * 100, 1)
+
+    def _trade_stats(self) -> dict:
+        """Expectancy stats per source from replayed trade outcomes."""
+        try:
+            rows = json.loads(open(TRADE_OUTCOMES_FILE, encoding="utf-8").read())
+        except Exception:
+            rows = []
+
+        def agg(sub: list[dict]) -> dict:
+            if not sub:
+                return {"n": 0}
+            rets = [r["ret_pct"] for r in sub if r.get("ret_pct") is not None]
+            wins = [r for r in sub if r.get("result") == "win"]
+            losses = [r for r in sub if r.get("result") == "loss"]
+            timeouts = [r for r in sub if r.get("result") == "timeout"]
+            gross_w = sum(r["ret_pct"] for r in wins if (r.get("ret_pct") or 0) > 0)
+            gross_l = abs(sum(r["ret_pct"] for r in losses if (r.get("ret_pct") or 0) < 0))
+            return {
+                "n": len(sub),
+                "wins": len(wins), "losses": len(losses), "timeouts": len(timeouts),
+                "win_rate": round(100 * len(wins) / len(sub), 1),
+                "wr_lower_95": self._wilson_lower(len(wins), len(sub)),
+                "avg_ret": round(sum(rets) / len(rets), 2) if rets else None,
+                "avg_win": round(gross_w / len(wins), 2) if wins else None,
+                "avg_loss": round(-gross_l / len(losses), 2) if losses else None,
+                "profit_factor": round(gross_w / gross_l, 2) if gross_l else None,
+                "avg_mfe": round(sum(r.get("mfe_pct") or 0 for r in sub) / len(sub), 2),
+                "avg_mae": round(sum(r.get("mae_pct") or 0 for r in sub) / len(sub), 2),
+            }
+
+        by_src: dict[str, list[dict]] = {}
+        for r in rows:
+            by_src.setdefault(r.get("source") or "?", []).append(r)
+        return {
+            "n": len(rows),
+            "overall": agg(rows),
+            "by_source": {s: agg(v) for s, v in sorted(by_src.items())},
+        }
+
     @staticmethod
     def _outcome_stats(rows: list[dict]) -> dict:
         """Per-source stats at each horizon from scored outcomes."""
@@ -473,9 +555,13 @@ class PerformanceAgent:
         mins = now.hour * 60 + now.minute
         return mins < 9 * 60 + 15 or mins >= 15 * 60 + 30
 
-    def suggestions(self) -> dict:
-        """Analyse performance rows and produce improvement recommendations."""
-        if not self._market_closed():
+    def suggestions(self, force: bool = False) -> dict:
+        """Analyse performance rows and produce improvement recommendations.
+
+        ``force=True`` runs the analysis on demand even during market hours
+        (intraday mark-to-market stats are noisier — findings say so).
+        """
+        if not force and not self._market_closed():
             return {
                 "findings": ["Market is still open — optimizer analysis runs after 15:30 IST."],
                 "tuning": {},
@@ -547,16 +633,41 @@ class PerformanceAgent:
                 "focus on position sizing and target discipline."
             )
 
-        # --- per-source weak spots ----------------------------------------------
-        by_src = report.get("stats", {}).get("by_source", {})
-        for src, st in by_src.items():
-            if st.get("scored", 0) >= 3 and st.get("avg_return", 0) < -0.5:
+        # --- per-source weak spots (trade-replay expectancy, significance-gated) --
+        # Prefer replayed target/SL outcomes; only judge a source once it has
+        # MIN_TRADE_SAMPLE evaluated trades, and only tighten/relax on a
+        # statistically meaningful edge (Wilson lower bound below 50% for
+        # losers; positive expectancy for relaxations).
+        trade_stats = report.get("trade_stats") or {}
+        ts_by_src = (trade_stats.get("by_source") or {})
+        gated = False
+        for src, st in ts_by_src.items():
+            n = st.get("n", 0)
+            if n < MIN_TRADE_SAMPLE:
+                continue
+            gated = True
+            avg = st.get("avg_ret")
+            pf = st.get("profit_factor")
+            wr_lb = st.get("wr_lower_95")
+            if avg is not None and avg < 0 and (pf is None or pf < 1.0) and (wr_lb is None or wr_lb < 50):
                 findings.append(
-                    f"'{src}' agent underperforming (avg {st['avg_return']:+.2f}%, "
-                    f"win rate {st.get('win_rate', 0)}%). Its universe may be too broad — "
-                    "restrict to top-liquid names or add a liquidity filter."
+                    f"'{src}' underperforms on replayed trades (n={n}, avg {avg:+.2f}%, "
+                    f"PF {pf}, WR floor {wr_lb}%). Restricting to high-liquidity names."
                 )
                 tuning[f"{src}_liquidity_filter"] = True
+            elif avg is not None and avg > 0.3:
+                # healthy edge — relax a previously applied liquidity restriction
+                tuning[f"{src}_liquidity_filter"] = False
+        if not gated:
+            by_src = report.get("stats", {}).get("by_source", {})
+            for src, st in by_src.items():
+                if st.get("scored", 0) >= 3 and st.get("avg_return", 0) < -0.5:
+                    findings.append(
+                        f"'{src}' agent underperforming (avg {st['avg_return']:+.2f}%, "
+                        f"win rate {st.get('win_rate', 0)}%). Its universe may be too broad — "
+                        "restrict to top-liquid names or add a liquidity filter."
+                    )
+                    tuning[f"{src}_liquidity_filter"] = True
 
         # persist tuning so scanners pick it up on the next scan.
         # Merge with existing file: agent-managed keys are updated, manual
