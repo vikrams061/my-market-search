@@ -1,4 +1,4 @@
 {
-  "min_volume_ratio": 1.0,
-  "credit_liquidity_filter": true
+  "bullish_min_confidence": 55,
+  "min_volume_ratio": 1.0
 }
