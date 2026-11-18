@@ -22,12 +22,13 @@ _logger = logging.getLogger("pick_history")
 
 
 def in_record_window() -> bool:
-    """True only Mon–Fri 09:30–15:15 IST."""
+    """True only Mon–Fri 09:30–13:00 IST — late-day picks lack runway for
+    intraday targets and corrupt expectancy stats."""
     now = datetime.now(IST)
     if now.weekday() >= 5:
         return False
     mins = now.hour * 60 + now.minute
-    return 9 * 60 + 30 <= mins <= 15 * 60 + 15
+    return 9 * 60 + 30 <= mins <= 13 * 60
 
 
 def load_history() -> list[dict]:
@@ -54,6 +55,8 @@ def record_pick(
     score: Optional[float] = None,
     short_strike: Optional[float] = None,
     long_strike: Optional[float] = None,
+    target: Optional[float] = None,
+    stop_loss: Optional[float] = None,
     pick_date: Optional[str] = None,
 ) -> bool:
     """Append a pick to history. Dedupes on (date, source, side, symbol).
@@ -61,7 +64,7 @@ def record_pick(
     Returns True if a row was written. No-op outside market hours.
     """
     if not in_record_window():
-        _logger.debug("Skipping pick record outside market hours (09:30-15:15 IST).")
+        _logger.debug("Skipping pick record outside market hours (09:30-13:00 IST).")
         return False
     d = pick_date or date.today().isoformat()
     history = load_history()
@@ -84,6 +87,10 @@ def record_pick(
         row["short_strike"] = short_strike
     if long_strike is not None:
         row["long_strike"] = long_strike
+    if target is not None:
+        row["target"] = target
+    if stop_loss is not None:
+        row["stop_loss"] = stop_loss
     history.append(row)
     save_history(history)
     return True
@@ -104,7 +111,7 @@ def upsert_daily_pick(
     history always matches the currently displayed pick.
     """
     if not in_record_window():
-        _logger.debug("Skipping pick record outside market hours (09:30-15:15 IST).")
+        _logger.debug("Skipping pick record outside market hours (09:30-13:00 IST).")
         return False
     d = pick_date or date.today().isoformat()
     history = load_history()

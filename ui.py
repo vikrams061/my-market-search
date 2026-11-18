@@ -1165,7 +1165,18 @@ runCredit();
 setInterval(runCredit, 300000);
 
 // ---- Agent performance ----------------------------------------------------
+let optLocked = false;   // manual Optimize result stays until real auto findings arrive
+let lastAutoOpt = 0;     // throttle for intraday dry-run monitoring
+
 async function refreshPerf(force) {
+  // intraday monitoring: dry-run optimizer every ~10 min (no tuning writes)
+  if (Date.now() - lastAutoOpt > 600000) {
+    lastAutoOpt = Date.now();
+    fetch('/api/performance/optimize?dry=1').then(r => r.json()).then(d => {
+      const f = (d.findings || []);
+      if (!f.some(x => x.includes('Market is still open'))) renderOptimizer(d);
+    }).catch(() => {});
+  }
   try {
     const res = await fetch('/api/performance' + (force ? '?refresh=1' : ''));
     const d = await res.json();
@@ -1281,7 +1292,13 @@ async function refreshPerf(force) {
       </div>`;
 
     const opt = d.optimizer || {};
-    renderOptimizer(opt);
+    const optFindings = opt.findings || [];
+    const optPlaceholder = optFindings.some(f => f.includes('Market is still open'));
+    // real auto findings override a manual/dry-run display; the placeholder doesn't
+    if (!optLocked || !optPlaceholder) {
+      renderOptimizer(opt);
+      if (!optPlaceholder) optLocked = false;
+    }
 
     // Manual trades
     const trs = document.getElementById('trade-rows');
@@ -1322,6 +1339,7 @@ async function runOptimizer(btn) {
     const res = await fetch('/api/performance/optimize');
     const d = await res.json();
     if (!res.ok) { renderOptimizer({findings: [d.detail || 'Optimizer failed']}); return; }
+    optLocked = true;
     renderOptimizer(d);
     refreshPerf(true);  // pick up any tuning the optimizer wrote
   } catch (e) {
@@ -1693,10 +1711,10 @@ def create_app(
         return data
 
     @app.get("/api/performance/optimize")
-    async def run_optimizer() -> dict:
+    async def run_optimizer(dry: bool = False) -> dict:
         if performance is None:
             raise HTTPException(status_code=503, detail="Performance agent not available")
-        return performance.suggestions(force=True)
+        return performance.suggestions(force=True, persist=not dry)
 
     # ------------------------------------------------------------------
     # Momentum radar (broad multi-cap) endpoints

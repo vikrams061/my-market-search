@@ -238,6 +238,12 @@ def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
         t2 = pct(price, 0.015) if bullish else pct(price, -0.015)
         sl = orl if bullish else orh
         strat = "Bull Call Spread" if bullish else "Bear Put Spread"
+        try:
+            from pick_history import record_pick
+            record_pick(source="orb", side="bullish" if bullish else "bearish",
+                        symbol=inst.symbol, entry_price=price, target=t1, stop_loss=sl)
+        except Exception:
+            pass
         return header + f"""
 - **Directional Bias:** {bias}
 - **Entry Trigger Zone:** {'Breakout above ORH ₹' + format(orh, ',.2f') if bullish else 'Breakdown below ORL ₹' + format(orl, ',.2f')} with RVOL {rvol_txt} (>1.5) and 15m RSI {rsi_15m}
@@ -260,6 +266,12 @@ def analyze_orb(symbol: str, kind: str, logger: logging.Logger) -> str:
         t2 = pct(price, 0.09) if bullish else pct(price, -0.09)
         sl = swing_low or pct(price, -0.02) if bullish else swing_high or pct(price, 0.02)
         strat = "Bull Call Spread" if bullish else "Bear Put Spread"
+        try:
+            from pick_history import record_pick
+            record_pick(source="orb", side="bullish" if bullish else "bearish",
+                        symbol=inst.symbol, entry_price=price, target=t1, stop_loss=sl)
+        except Exception:
+            pass
         return header + f"""
 - **Directional Bias:** {bias} — intraday ORB filter not met; swing setup active
 - **Entry Trigger Zone:** RSI+EMA pullback/reclaim setup

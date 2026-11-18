@@ -555,12 +555,17 @@ class PerformanceAgent:
         mins = now.hour * 60 + now.minute
         return mins < 9 * 60 + 15 or mins >= 15 * 60 + 30
 
-    def suggestions(self, force: bool = False) -> dict:
+    def suggestions(self, force: bool = False, persist: Optional[bool] = None) -> dict:
         """Analyse performance rows and produce improvement recommendations.
 
         ``force=True`` runs the analysis on demand even during market hours
-        (intraday mark-to-market stats are noisier — findings say so).
+        (intraday mark-to-market stats are noisier). ``persist`` controls
+        whether tuning keys are written to agent_tuning.json — defaults to
+        market-closed only, so intraday dry-runs can't tighten thresholds on
+        noisy live prices.
         """
+        if persist is None:
+            persist = self._market_closed()
         if not force and not self._market_closed():
             return {
                 "findings": ["Market is still open — optimizer analysis runs after 15:30 IST."],
@@ -671,8 +676,9 @@ class PerformanceAgent:
 
         # persist tuning so scanners pick it up on the next scan.
         # Merge with existing file: agent-managed keys are updated, manual
-        # keys the agent doesn't touch are preserved.
-        if tuning:
+        # keys the agent doesn't touch are preserved. Skipped on intraday
+        # dry-runs so noisy live prices can't ratchet thresholds.
+        if tuning and persist:
             try:
                 try:
                     existing = json.loads(open(TUNING_FILE, encoding="utf-8").read())

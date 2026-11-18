@@ -360,18 +360,19 @@ class NiftyScanner:
     # ------------------------------------------------------------------
     @staticmethod
     def _in_record_window() -> bool:
-        """True only Mon–Fri 09:30–15:15 IST — picks logged outside market
-        hours get stale entry prices (entry == close) and corrupt stats."""
+        """True only Mon–Fri 09:30–13:00 IST — picks logged outside market
+        hours get stale entry prices (entry == close) and corrupt stats;
+        after 13:00 there's no runway left for intraday targets."""
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
         if now.weekday() >= 5:
             return False
         mins = now.hour * 60 + now.minute
-        return 9 * 60 + 30 <= mins <= 15 * 60 + 15
+        return 9 * 60 + 30 <= mins <= 13 * 60
 
     def _record_history(self, picks: dict) -> None:
         """Append today's bullish/bearish picks to pick_history.json."""
         if not self._in_record_window():
-            self._logger.debug("Skipping pick history outside market hours (09:30–15:15 IST).")
+            self._logger.debug("Skipping pick history outside market hours (09:30–13:00 IST).")
             return
         try:
             try:

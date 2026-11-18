@@ -171,6 +171,14 @@ def analyze_options(symbol: str, kind: str, logger: logging.Logger) -> str:
 **NO TRADE** — {"chop zone (RSI 45–55 flat, no EMA support)" if chop else "no valid RSI+EMA trigger"}. Wait for the breakout/breakdown levels above before constructing a spread.
 """
 
+    # record directional pick for performance tracking
+    try:
+        from pick_history import record_pick
+        record_pick(source="options", side=bias.lower(), symbol=inst.symbol,
+                    entry_price=cmp_price, target=t1, stop_loss=sl)
+    except Exception:
+        pass
+
     monthly_expiry = _next_monthly_expiry()
     rr_ok = "✅" if (rr and rr >= 2) else "⚠️ below 1:2 mandate"
 

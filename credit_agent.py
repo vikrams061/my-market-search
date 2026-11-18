@@ -94,8 +94,8 @@ def _india_vix() -> dict:
 def _record_credit_pick(source_symbol: str, side: str, entry: float) -> None:
     """Append this recommendation to shared pick history for perf tracking."""
     now = datetime.now(IST)
-    if now.weekday() >= 5 or not (9 * 60 + 30 <= now.hour * 60 + now.minute <= 15 * 60 + 15):
-        return  # outside market hours — stale entry prices corrupt stats
+    if now.weekday() >= 5 or not (9 * 60 + 30 <= now.hour * 60 + now.minute <= 13 * 60):
+        return  # outside pick-recording window — stale/lateday entries corrupt stats
     try:
         try:
             history = json.loads(open(PICK_HISTORY_FILE, encoding="utf-8").read())
