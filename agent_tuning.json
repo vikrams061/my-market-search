@@ -1,10 +1,12 @@
 {
-  "min_confidence": 60,
+  "min_confidence": 50,
   "bullish_min_confidence": 55,
-  "bearish_min_abs_score": 35,
+  "bearish_min_abs_score": 25,
   "min_volume_ratio": 1.0,
   "nifty_liquidity_filter": false,
   "active_liquidity_filter": true,
   "momentum_liquidity_filter": true,
-  "min_abs_score": 20
+  "min_abs_score": 20,
+  "credit_liquidity_filter": true,
+  "credit_tracker_liquidity_filter": true
 }
