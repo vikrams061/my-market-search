@@ -1,7 +1,7 @@
 {
-  "min_confidence": 50,
+  "min_confidence": 60,
   "bullish_min_confidence": 55,
-  "bearish_min_abs_score": 25,
+  "bearish_min_abs_score": 35,
   "min_volume_ratio": 1.0,
   "nifty_liquidity_filter": false,
   "active_liquidity_filter": true,
